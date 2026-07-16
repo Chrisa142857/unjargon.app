@@ -1,6 +1,8 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import Link from "next/link";
+import { useEffect, useMemo, useState } from "react";
+import { api } from "@/lib/api";
 
 export type WikiTerm = {
   id: number;
@@ -15,9 +17,30 @@ export type WikiTerm = {
   devices: number;
 };
 
-export default function Wiki({ terms: initial }: { terms: WikiTerm[] }) {
-  const [terms, setTerms] = useState(initial);
+export default function Wiki() {
+  const [terms, setTerms] = useState<WikiTerm[]>([]);
+  const [loaded, setLoaded] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [query, setQuery] = useState("");
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch(api("/api/wiki"));
+        if (!res.ok) throw new Error(`wiki fetch failed (${res.status})`);
+        const data = await res.json();
+        if (!cancelled) setTerms(data.terms);
+      } catch (err) {
+        if (!cancelled) setLoadError(String(err));
+      } finally {
+        if (!cancelled) setLoaded(true);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const grouped = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -39,9 +62,12 @@ export default function Wiki({ terms: initial }: { terms: WikiTerm[] }) {
   return (
     <main className="min-h-dvh bg-neutral-950 text-neutral-100">
       <header className="sticky top-0 flex items-center gap-3 border-b border-neutral-800 bg-neutral-950/95 px-4 py-3">
-        <a href="/live" className="text-sm text-neutral-400 hover:text-neutral-100">
+        <Link
+          href="/live"
+          className="text-sm text-neutral-400 hover:text-neutral-100"
+        >
           ← live
-        </a>
+        </Link>
         <span className="font-semibold tracking-tight">unjargon wiki</span>
         <input
           value={query}
@@ -56,7 +82,13 @@ export default function Wiki({ terms: initial }: { terms: WikiTerm[] }) {
           {terms.length} terms your agents taught you, across every machine.
         </p>
         {grouped.length === 0 && (
-          <p className="text-neutral-500">nothing matches.</p>
+          <p className="text-neutral-500">
+            {!loaded
+              ? "loading…"
+              : loadError
+                ? `couldn't reach the unjargon API — ${loadError}`
+                : "nothing matches."}
+          </p>
         )}
         {grouped.map(([domain, list]) => (
           <section key={domain} className="mb-8">
@@ -101,7 +133,9 @@ function TermRow({
       setLoading(true);
       setError(null);
       try {
-        const res = await fetch(`/api/terms/${t.id}/expand`, { method: "POST" });
+        const res = await fetch(api(`/api/terms/${t.id}/expand`), {
+          method: "POST",
+        });
         if (!res.ok) throw new Error(`expand failed (${res.status})`);
         const data = await res.json();
         onExpanded(data.l2, data.l3);

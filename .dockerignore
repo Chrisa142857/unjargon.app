@@ -1,0 +1,9 @@
+.git
+.github
+web/node_modules
+web/.next
+web/out
+web/.env*
+collector/unjargond
+*.md
+!README.md

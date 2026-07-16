@@ -1,45 +1,7 @@
-import { countDistinct, eq } from "drizzle-orm";
-import { db, tables } from "@/db";
-import Wiki, { type WikiTerm } from "./wiki";
+import Wiki from "./wiki";
 
-export const dynamic = "force-dynamic";
-
-// The personal wiki: every term ever extracted, across all machines and
-// sessions — your delegation history as a curriculum.
-export default async function WikiPage() {
-  const rows = await db
-    .select({
-      id: tables.terms.id,
-      term: tables.terms.term,
-      domain: tables.terms.domain,
-      l1: tables.terms.l1,
-      l2: tables.terms.l2,
-      l3: tables.terms.l3,
-      salience: tables.terms.salience,
-      sightings: countDistinct(tables.termSightings.messageId),
-      sessions: countDistinct(tables.messages.sessionId),
-      devices: countDistinct(tables.sessions.deviceId),
-    })
-    .from(tables.terms)
-    .leftJoin(
-      tables.termSightings,
-      eq(tables.termSightings.termId, tables.terms.id),
-    )
-    .leftJoin(
-      tables.messages,
-      eq(tables.messages.id, tables.termSightings.messageId),
-    )
-    .leftJoin(
-      tables.sessions,
-      eq(tables.sessions.id, tables.messages.sessionId),
-    )
-    .groupBy(tables.terms.id);
-
-  const terms: WikiTerm[] = rows.sort(
-    (a, b) =>
-      a.domain.localeCompare(b.domain) ||
-      (b.salience ?? 0) - (a.salience ?? 0),
-  );
-
-  return <Wiki terms={terms} />;
+// Client-side data fetching (via /api/wiki) so this page works both
+// server-rendered (Space) and as a static export on GitHub Pages.
+export default function WikiPage() {
+  return <Wiki />;
 }

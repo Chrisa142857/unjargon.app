@@ -1,6 +1,8 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { api } from "@/lib/api";
 
 export type LiveAnnotation = {
   id: number;
@@ -55,24 +57,54 @@ const CALIBRATION_LABELS: [Calibration, string][] = [
 // The Unjargon Stream: subtitles by default, ▸ expands the annotated
 // original, highlighted spans tap to a sentence-level rewrite. ⌘/ctrl-J
 // flips the whole stream between subtitles and originals.
-export default function LiveStream({
-  initialMessages,
-  initialTerms,
-  initialCalibration,
-}: {
-  initialMessages: LiveMessage[];
-  initialTerms: LiveTerm[];
-  initialCalibration: Calibration;
-}) {
-  const [messages, setMessages] = useState<LiveMessage[]>(initialMessages);
-  const [terms, setTerms] = useState<LiveTerm[]>(initialTerms);
+// Data comes from GET /api/bootstrap + the SSE stream, all client-side, so
+// the static GitHub Pages build works against a remote API.
+export default function LiveStream() {
+  const [messages, setMessages] = useState<LiveMessage[]>([]);
+  const [terms, setTerms] = useState<LiveTerm[]>([]);
+  const [loaded, setLoaded] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [connected, setConnected] = useState(false);
   const [pinned, setPinned] = useState(true);
   const [card, setCard] = useState<{ termId: number; messageId: number } | null>(
     null,
   );
   const [showOriginals, setShowOriginals] = useState(false);
-  const [calibration, setCalibration] = useState<Calibration>(initialCalibration);
+  const [calibration, setCalibration] = useState<Calibration>("new");
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch(api("/api/bootstrap"));
+        if (!res.ok) throw new Error(`bootstrap failed (${res.status})`);
+        const data = await res.json();
+        if (cancelled) return;
+        // SSE may already have delivered rows; keep whichever arrived first.
+        setMessages((live) => {
+          const seen = new Set<number>(
+            data.messages.map((m: LiveMessage) => m.id),
+          );
+          return [
+            ...data.messages,
+            ...live.filter((m: LiveMessage) => !seen.has(m.id)),
+          ];
+        });
+        setTerms((live) => {
+          const seen = new Set<number>(data.terms.map((t: LiveTerm) => t.id));
+          return [...data.terms, ...live.filter((t) => !seen.has(t.id))];
+        });
+        setCalibration(data.calibration);
+      } catch (err) {
+        if (!cancelled) setLoadError(String(err));
+      } finally {
+        if (!cancelled) setLoaded(true);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   // Global toggle: ⌘J / ctrl-J flips subtitles ⇄ originals everywhere.
   useEffect(() => {
@@ -88,7 +120,7 @@ export default function LiveStream({
 
   async function changeCalibration(level: Calibration) {
     setCalibration(level);
-    await fetch("/api/settings", {
+    await fetch(api("/api/settings"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ calibration: level }),
@@ -98,7 +130,7 @@ export default function LiveStream({
   const scrollerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    const es = new EventSource("/api/stream");
+    const es = new EventSource(api("/api/stream"));
     es.onopen = () => setConnected(true);
     es.onerror = () => setConnected(false);
     es.onmessage = (e) => {
@@ -176,12 +208,12 @@ export default function LiveStream({
           </span>
         )}
         <span className="ml-auto flex items-center gap-2">
-          <a
+          <Link
             href="/wiki"
             className="rounded-md border border-neutral-700 px-2 py-1 text-xs text-neutral-400 hover:text-neutral-100"
           >
             wiki
-          </a>
+          </Link>
           <button
             onClick={() => setShowOriginals((v) => !v)}
             title="toggle subtitles ⇄ originals (⌘J)"
@@ -216,10 +248,18 @@ export default function LiveStream({
         <div className="mx-auto flex max-w-2xl flex-col gap-7">
           {messages.length === 0 && (
             <p className="mt-24 text-center text-neutral-500">
-              Waiting for agent messages… start a collector:
-              <code className="mt-2 block text-sm text-neutral-400">
-                unjargond replay fixtures/session.jsonl
-              </code>
+              {!loaded ? (
+                "loading…"
+              ) : loadError ? (
+                <>couldn&apos;t reach the unjargon API — {loadError}</>
+              ) : (
+                <>
+                  Waiting for agent messages… start a collector:
+                  <code className="mt-2 block text-sm text-neutral-400">
+                    unjargond replay fixtures/session.jsonl
+                  </code>
+                </>
+              )}
             </p>
           )}
           {messages.map((m) => (
@@ -288,7 +328,7 @@ function TermCard({
     let cancelled = false;
     (async () => {
       try {
-        const res = await fetch(`/api/terms/${term.id}/expand`, {
+        const res = await fetch(api(`/api/terms/${term.id}/expand`), {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ messageId }),

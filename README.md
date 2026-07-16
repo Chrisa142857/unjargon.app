@@ -1,3 +1,15 @@
+---
+title: unjargon
+emoji: 📺
+colorFrom: gray
+colorTo: yellow
+sdk: docker
+app_port: 7860
+pinned: false
+license: mit
+short_description: Subtitles for your agents — live plain-language translation
+---
+
 # unjargon.app
 
 > Agents love initials and jargon; users don't know them in context. unjargon is
