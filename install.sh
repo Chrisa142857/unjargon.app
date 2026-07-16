@@ -162,3 +162,9 @@ fi
 echo
 echo "unjargon collector installed. Start (or continue) a Claude Code session"
 echo "on this machine, then open $SERVER/live — subtitles should appear."
+echo
+echo "AI usage notice: by default unjargond translates on THIS machine using"
+echo "your own AI CLI (claude -p, haiku) — about one extra lightweight AI call"
+echo "per substantive agent message, on your existing subscription. To opt out:"
+echo "  echo 'UNJARGON_LOCAL_TRANSLATE=off' >> $CONF_DIR/env"
+echo "(the server then translates instead, if it has an ANTHROPIC_API_KEY)."

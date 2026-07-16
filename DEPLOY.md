@@ -23,10 +23,13 @@ mirror on your own github.io domain. Collectors point at the Space either way.
    git push hf main
    ```
 
-3. In the Space → Settings → Variables and secrets, add **secrets**:
-   - `ANTHROPIC_API_KEY` — for real translations
-     (or a variable `UNJARGON_FAKE_TRANSLATOR=1` for the canned offline demo)
-   - `INGEST_TOKEN` — any string; collectors must present it
+3. In the Space → Settings → Variables and secrets, add:
+   - `INGEST_TOKEN` (secret) — any string; collectors must present it
+   - `ANTHROPIC_API_KEY` (secret) — **optional.** By default collectors run
+     local-translate mode (they reuse the user's own `claude` CLI credentials
+     on the machine where the agent runs), so the server needs no key. Set
+     this only as a fallback for collectors without an AI CLI, or set the
+     variable `UNJARGON_FAKE_TRANSLATOR=1` for the canned offline demo.
 4. Wait for the build; the app is at `https://<hf-user>-unjargon.hf.space`
    (exact URL shown under the Space's ⋮ → "Embed this Space").
 

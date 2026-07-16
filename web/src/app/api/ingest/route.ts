@@ -1,6 +1,10 @@
 import { db, tables } from "@/db";
 import { publish } from "@/lib/bus";
-import { scheduleTranslation } from "@/lib/translate";
+import {
+  scheduleTranslation,
+  storeProvidedTranslation,
+  type TranslationResult,
+} from "@/lib/translate";
 
 export const dynamic = "force-dynamic";
 
@@ -9,7 +13,9 @@ type IngestBody = {
   tool: string;
   session_id: string;
   cwd?: string;
-  messages: { ts: string; text: string }[];
+  // translation is present when the collector ran local-translate mode
+  // (the user's own AI CLI); the server then skips its own LLM call.
+  messages: { ts: string; text: string; translation?: TranslationResult }[];
 };
 
 function bad(status: number, error: string) {
@@ -93,7 +99,21 @@ export async function POST(req: Request) {
     });
   }
 
-  scheduleTranslation(session.id);
+  // Collector-provided translations (local-translate mode) store directly;
+  // anything without one goes through the server-side pipeline (needs
+  // ANTHROPIC_API_KEY or the fake translator).
+  let needServerTranslation = false;
+  for (let i = 0; i < stored.length; i++) {
+    const provided = msgs[i].translation;
+    if (provided && typeof provided === "object") {
+      await storeProvidedTranslation(stored[i], provided);
+    } else {
+      needServerTranslation = true;
+    }
+  }
+  if (needServerTranslation) {
+    scheduleTranslation(session.id);
+  }
 
   return Response.json({ stored: stored.length });
 }

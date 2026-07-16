@@ -1,0 +1,220 @@
+// Package aicli is local-translate mode: instead of the server holding an
+// API key, the collector reuses the AI credentials already on this machine
+// by spawning a fresh headless session of the user's own AI CLI
+// (`claude -p`) for each agent message.
+//
+// Transparency contract: this makes ONE extra lightweight AI call (haiku by
+// default) per translated agent message, billed to the user's existing
+// Claude subscription/account. It is announced at startup and can be turned
+// off with -local-translate=off (the server then translates if it has a key).
+//
+// The prompt template is NOT hard-coded here — it is fetched from the web
+// app's GET /api/prompt, so all prompting stays in web/src/lib/prompts.ts.
+package aicli
+
+import (
+	"bytes"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"os"
+	"os/exec"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/chrisa142857/unjargon.app/collector/internal/parse"
+)
+
+// Messages shorter than this can't contain explainable jargon; skip them
+// locally instead of wasting one of the user's AI calls (mirrors the server).
+const trivialLength = 20
+
+// Short TTL: the template carries the server's current glossary and domain
+// labels (for dedupe), which grow as the session runs.
+const templateTTL = 30 * time.Second
+const callTimeout = 120 * time.Second
+
+type Translator struct {
+	ServerURL string
+	Command   []string // CLI invocation; the prompt is appended as final arg
+	Dir       string   // cwd for child sessions — see RecursionGuard
+	Model     string   // passed via --model when using the default claude CLI
+
+	mu         sync.Mutex
+	template   string
+	templateAt time.Time
+}
+
+// Detect builds a Translator according to mode ("auto" | "on" | "off").
+// In auto mode it quietly returns nil when no AI CLI is available.
+func Detect(mode, serverURL, stateDir string) (*Translator, error) {
+	if mode == "off" {
+		return nil, nil
+	}
+	cmd, model := commandFromEnv()
+	if cmd == nil {
+		if _, err := exec.LookPath("claude"); err != nil {
+			if mode == "on" {
+				return nil, fmt.Errorf("local-translate=on but no `claude` CLI on PATH (and UNJARGON_TRANSLATE_CMD unset)")
+			}
+			return nil, nil
+		}
+		cmd = []string{"claude", "--output-format", "json", "-p"}
+	}
+	// Child sessions run in a marker directory so the daemon can recognize
+	// (and never tail) the transcripts they generate. See RecursionGuard.
+	dir := stateDir + "/unjargond-translator"
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return nil, err
+	}
+	return &Translator{ServerURL: serverURL, Command: cmd, Dir: dir, Model: model}, nil
+}
+
+// commandFromEnv honors UNJARGON_TRANSLATE_CMD (space-separated command that
+// receives the prompt as its final argument and prints JSON — used for other
+// AI CLIs and for tests).
+func commandFromEnv() (cmd []string, model string) {
+	model = os.Getenv("UNJARGON_TRANSLATE_MODEL")
+	if model == "" {
+		model = "haiku"
+	}
+	if raw := os.Getenv("UNJARGON_TRANSLATE_CMD"); raw != "" {
+		return strings.Fields(raw), model
+	}
+	return nil, model
+}
+
+func (t *Translator) Describe() string {
+	return fmt.Sprintf("%s (model %s, fresh headless session per message, cwd %s)",
+		strings.Join(t.Command, " "), t.Model, t.Dir)
+}
+
+// Notice is the transparency banner logged at startup.
+func (t *Translator) Notice() string {
+	return "local-translate mode ON: unjargon will make one extra AI call per agent message\n" +
+		"  using YOUR credentials via: " + t.Describe() + "\n" +
+		"  This uses your existing AI subscription/quota. Disable with -local-translate=off\n" +
+		"  (translation then happens server-side if the server has an API key)."
+}
+
+// Translate runs one message through the user's AI CLI. Errors are returned
+// so the caller can leave msg.Translation nil (server-side fallback).
+func (t *Translator) Translate(msg *parse.AgentMessage) error {
+	if strings.TrimSpace(msg.Text) == "" || len(strings.TrimSpace(msg.Text)) < trivialLength {
+		msg.Translation = &parse.Translation{Skip: true}
+		return nil
+	}
+	tmpl, err := t.fetchTemplate()
+	if err != nil {
+		return fmt.Errorf("fetch prompt template: %w", err)
+	}
+	prompt := strings.Replace(tmpl, "{{MESSAGE}}", msg.Text, 1)
+
+	args := append([]string(nil), t.Command[1:]...)
+	if t.Command[0] == "claude" && t.Model != "" {
+		args = append([]string{"--model", t.Model}, args...)
+	}
+	args = append(args, prompt)
+	cmd := exec.Command(t.Command[0], args...)
+	cmd.Dir = t.Dir
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	timer := time.AfterFunc(callTimeout, func() {
+		if cmd.Process != nil {
+			cmd.Process.Kill()
+		}
+	})
+	err = cmd.Run()
+	timer.Stop()
+	if err != nil {
+		return fmt.Errorf("%s: %v (%s)", t.Command[0], err, firstLine(stderr.String()))
+	}
+
+	result, err := extractTranslation(stdout.Bytes())
+	if err != nil {
+		return err
+	}
+	msg.Translation = result
+	return nil
+}
+
+// extractTranslation handles both a claude-CLI JSON envelope ({"result":
+// "..."}), possibly with markdown fences inside, and bare JSON output.
+func extractTranslation(out []byte) (*parse.Translation, error) {
+	text := string(out)
+	var envelope struct {
+		Result  string `json:"result"`
+		IsError bool   `json:"is_error"`
+	}
+	if err := json.Unmarshal(out, &envelope); err == nil && envelope.Result != "" {
+		if envelope.IsError {
+			return nil, fmt.Errorf("AI CLI reported an error: %.120s", envelope.Result)
+		}
+		text = envelope.Result
+	}
+	start := strings.Index(text, "{")
+	end := strings.LastIndex(text, "}")
+	if start < 0 || end <= start {
+		return nil, fmt.Errorf("no JSON object in AI output: %.120q", text)
+	}
+	var tr parse.Translation
+	if err := json.Unmarshal([]byte(text[start:end+1]), &tr); err != nil {
+		return nil, fmt.Errorf("bad translation JSON: %v", err)
+	}
+	if !tr.Skip && strings.TrimSpace(tr.Subtitle) == "" {
+		tr = parse.Translation{Skip: true} // nothing useful came back
+	}
+	return &tr, nil
+}
+
+func (t *Translator) fetchTemplate() (string, error) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.template != "" && time.Since(t.templateAt) < templateTTL {
+		return t.template, nil
+	}
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Get(t.ServerURL + "/api/prompt")
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("GET /api/prompt: %s", resp.Status)
+	}
+	var body struct {
+		Template string `json:"template"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		return "", err
+	}
+	if !strings.Contains(body.Template, "{{MESSAGE}}") {
+		return "", fmt.Errorf("prompt template missing {{MESSAGE}} placeholder")
+	}
+	t.template = body.Template
+	t.templateAt = time.Now()
+	return t.template, nil
+}
+
+func firstLine(s string) string {
+	s = strings.TrimSpace(s)
+	if i := strings.IndexByte(s, '\n'); i >= 0 {
+		s = s[:i]
+	}
+	if len(s) > 160 {
+		s = s[:160]
+	}
+	return s
+}
+
+// RecursionGuard reports whether a transcript path belongs to one of OUR
+// translation child sessions. Headless `claude -p` runs write transcripts
+// under ~/.claude/projects/<encoded-cwd>/ like any session — without this
+// check the daemon would tail its own translation output and translate it,
+// forever. Child sessions run with cwd .../unjargond-translator, whose
+// encoded form survives in the transcript path.
+func RecursionGuard(path string) bool {
+	return strings.Contains(path, "unjargond-translator")
+}

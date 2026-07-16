@@ -60,6 +60,45 @@ ${input.text}
 >>>`;
 }
 
+// --- Local-translate mode (collector-side, user's own AI credentials) -----
+//
+// By default the collector translates on the user's machine by spawning a
+// fresh headless session of their own AI CLI (`claude -p`) per agent message
+// — no server API key needed. The collector fetches this template from
+// GET /api/prompt so ALL prompting stays in this one file. {{MESSAGE}} is
+// replaced by the collector with the agent message text.
+export function localTranslationTemplate(
+  level: CalibrationLevel,
+  knownTerms: string[] = [],
+  knownDomains: string[] = [],
+): string {
+  const known =
+    knownTerms.length > 0 ? knownTerms.join(", ") : "(none yet)";
+  const domains =
+    knownDomains.length > 0 ? knownDomains.join(", ") : "(none yet)";
+  return `${translationSystemPrompt(level)}
+
+Terms the user already has glossary entries for — do NOT re-extract these or trivial variants of them; you may still annotate their spans with term_ref: ${known}
+Existing domain labels — reuse one of these when close instead of inventing a variant: ${domains}
+
+You are running headless. Reply with ONLY one JSON object — no prose, no markdown fences — with exactly these fields:
+{
+  "skip": boolean,            // true for trivial messages (one-line acks, tool chatter); omit everything else when true
+  "subtitle": string,         // 1-3 plain-language sentences (required unless skip)
+  "annotations": [            // jargon worth explaining, [] if none
+    { "span": "exact substring of the original", "sentence_rewrite": "plain rewrite of the sentence containing it", "term_ref": "canonical term name" }
+  ],
+  "terms": [                  // at most 6 new glossary terms, most salient first, [] if none
+    { "term": string, "domain": "short domain label", "level1": "one-line explanation", "salience": 0-1 }
+  ]
+}
+
+Agent message:
+<<<
+{{MESSAGE}}
+>>>`;
+}
+
 // --- Lazy term expansion (L2/L3, generated on first click, cached) --------
 
 export function expansionSystemPrompt(level: CalibrationLevel): string {

@@ -23,6 +23,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/chrisa142857/unjargon.app/collector/internal/aicli"
 	"github.com/chrisa142857/unjargon.app/collector/internal/buffer"
 	"github.com/chrisa142857/unjargon.app/collector/internal/parse"
 	"github.com/chrisa142857/unjargon.app/collector/internal/ship"
@@ -31,10 +32,11 @@ import (
 
 type Config struct {
 	Shipper    *ship.Shipper
-	WatchRoots []string      // directories scanned for **/*.jsonl
-	Listen     string        // hook-notification address, e.g. 127.0.0.1:4577
-	StateDir   string        // offsets, offline queue, pid file
-	Interval   time.Duration // poll interval
+	Translator *aicli.Translator // nil → server-side translation
+	WatchRoots []string          // directories scanned for **/*.jsonl
+	Listen     string            // hook-notification address, e.g. 127.0.0.1:4577
+	StateDir   string            // offsets, offline queue, pid file
+	Interval   time.Duration     // poll interval
 }
 
 // tracked pairs a tailer with its per-file parser (formats like Codex carry
@@ -165,6 +167,12 @@ func (d *Daemon) scan() {
 // pre-existing files discovered by scan start at their current end so we
 // don't flood the stream with old history.
 func (d *Daemon) track(path string, fromHook bool) {
+	// Never tail our own translation child sessions (local-translate mode
+	// spawns headless AI sessions that write transcripts too) — tailing them
+	// would translate our own translations, forever.
+	if aicli.RecursionGuard(path) {
+		return
+	}
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	if _, ok := d.tailers[path]; ok {
@@ -215,6 +223,14 @@ func (d *Daemon) poll() {
 		for _, line := range lines {
 			if m, ok := tr.parser.ParseLine(line); ok {
 				msgs = append(msgs, m)
+			}
+		}
+		if d.cfg.Translator != nil {
+			for i := range msgs {
+				if err := d.cfg.Translator.Translate(&msgs[i]); err != nil {
+					// Ship untranslated; the server falls back if it can.
+					log.Printf("local translate failed (shipping raw): %v", err)
+				}
 			}
 		}
 		if len(msgs) > 0 {

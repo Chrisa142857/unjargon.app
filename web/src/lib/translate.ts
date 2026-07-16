@@ -19,7 +19,7 @@ const DEBOUNCE_MS = 2000;
 // Below this, a message can't contain explainable jargon worth a call.
 const TRIVIAL_LENGTH = 20;
 
-type TranslationResult = {
+export type TranslationResult = {
   skip: boolean;
   subtitle?: string;
   annotations?: { span: string; sentence_rewrite: string; term_ref?: string }[];
@@ -84,6 +84,16 @@ async function translateMessage(msg: typeof tables.messages.$inferSelect) {
     }
   }
   await storeResult(msg, sanitize(result, msg.text));
+}
+
+// A translation produced on the collector side (local-translate mode: the
+// user's own AI CLI ran it). Sanitized with the same rules as server-side
+// results, stored, and fanned out — no server LLM call happens.
+export async function storeProvidedTranslation(
+  msg: typeof tables.messages.$inferSelect,
+  provided: TranslationResult,
+): Promise<void> {
+  await storeResult(msg, sanitize(provided, msg.text));
 }
 
 // Defensive post-processing: the model is prompted with the trust rules, but

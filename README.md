@@ -31,6 +31,27 @@ plus a click-to-learn glossary in the browser. Observability for humans, not eng
   numbers/outcomes/filenames are copied verbatim, terms are never invented, and the
   annotated original is always one tap away.
 
+## Who pays for the AI? (transparency)
+
+**By default, no API key is needed anywhere.** unjargond runs *local-translate
+mode*: for each agent message it spawns a fresh headless session of the AI CLI
+already installed and signed in on that machine (`claude -p`, haiku by default)
+and ships the finished translation. That means:
+
+- Translation uses **your existing Claude subscription/account** — roughly one
+  extra lightweight AI call per substantive agent message (trivial acks are
+  skipped without a call). unjargond announces this at startup, every time.
+- Turn it off with `-local-translate=off` (or `UNJARGON_LOCAL_TRANSLATE=off`);
+  the server then translates instead, if it has an `ANTHROPIC_API_KEY`.
+- `UNJARGON_TRANSLATE_MODEL` picks the model (default `haiku`);
+  `UNJARGON_TRANSLATE_CMD` swaps in a different AI CLI entirely.
+- The prompt is fetched from the server's `GET /api/prompt` so the trust rules
+  live in exactly one file (`web/src/lib/prompts.ts`) either way.
+- Local translations pass through the same redaction pass as raw text before
+  leaving the machine, and the server re-applies the same sanitizer caps.
+- unjargond never tails the transcripts of its own translation sessions
+  (they run in a marker directory the daemon refuses to track).
+
 ## How it works
 
 ```
