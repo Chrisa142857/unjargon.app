@@ -25,6 +25,12 @@ plus a click-to-learn glossary in the browser. Observability for humans, not eng
   rewrite, go deeper for the L1/L2/L3 term card (L3 is grounded in *your* session).
   ⌘/ctrl-J flips the whole stream to originals as you outgrow the subtitles, and the
   calibration selector (new / technical amateur / expert) tunes every rewrite.
+- **Long sessions collapse, they don't scroll.** Older stretches of the stream roll
+  up into digest cards ("Tue 09:00–13:13 · 24 updates: sped up the pipeline 41s→6s,
+  fixed two failing tests…") built from the subtitles under the same trust rules —
+  tap to re-expand the real messages, which are always still there. A ★ highlights
+  toggle filters to decisions, outcomes, and failures only (every message gets an
+  importance score from the same single translation call).
 - **`/wiki` — the durable glossary.** Everything your agents taught you, across all
   machines and sessions, searchable and grouped by domain.
 - **Trust rules, enforced in the prompt and in code:** failures are never softened,

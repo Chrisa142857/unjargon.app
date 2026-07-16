@@ -1,4 +1,4 @@
-import { desc, eq, inArray } from "drizzle-orm";
+import { desc, eq, inArray, ne } from "drizzle-orm";
 import { db, tables } from "@/db";
 import { getCalibration } from "@/lib/settings";
 
@@ -7,7 +7,27 @@ export const dynamic = "force-dynamic";
 // Everything /live needs on first paint, in one round-trip. The UI fetches
 // client-side (rather than server-rendering) so the same static export can
 // run on GitHub Pages against a remote API.
+//
+// Long sessions: messages already covered by a digest are collapsed —
+// the response carries digest cards plus only the uncovered tail.
 export async function GET() {
+  const digestRows = await db
+    .select()
+    .from(tables.digests)
+    .where(ne(tables.digests.summary, "")) // claimed-but-unfinished stay hidden
+    .orderBy(desc(tables.digests.id))
+    .limit(200);
+  digestRows.reverse();
+
+  // Per session, everything up to the newest digest is covered.
+  const coveredTo = new Map<number, number>();
+  for (const d of digestRows) {
+    coveredTo.set(
+      d.sessionId,
+      Math.max(coveredTo.get(d.sessionId) ?? 0, d.toMessageId),
+    );
+  }
+
   const rows = await db
     .select({
       id: tables.messages.id,
@@ -15,6 +35,7 @@ export async function GET() {
       ts: tables.messages.ts,
       text: tables.messages.text,
       subtitle: tables.messages.subtitle,
+      importance: tables.messages.importance,
       translatedAt: tables.messages.translatedAt,
       device: tables.devices.name,
       tool: tables.sessions.tool,
@@ -25,8 +46,11 @@ export async function GET() {
     .innerJoin(tables.devices, eq(tables.sessions.deviceId, tables.devices.id))
     .orderBy(desc(tables.messages.id))
     .limit(100);
+  const uncovered = rows.filter(
+    (r) => r.id > (coveredTo.get(r.sessionId) ?? 0),
+  );
 
-  const ids = rows.map((r) => r.id);
+  const ids = uncovered.map((r) => r.id);
   const annotationRows =
     ids.length > 0
       ? await db
@@ -53,6 +77,16 @@ export async function GET() {
 
   return Response.json({
     calibration: await getCalibration(),
+    digests: digestRows.map((d) => ({
+      id: d.id,
+      sessionId: d.sessionId,
+      fromMessageId: d.fromMessageId,
+      toMessageId: d.toMessageId,
+      fromTs: d.fromTs.toISOString(),
+      toTs: d.toTs.toISOString(),
+      messageCount: d.messageCount,
+      summary: d.summary,
+    })),
     terms: termRows.map((t) => ({
       id: t.id,
       term: t.term,
@@ -62,7 +96,7 @@ export async function GET() {
       l3: t.l3,
       salience: t.salience,
     })),
-    messages: rows.reverse().map((r) => ({
+    messages: uncovered.reverse().map((r) => ({
       id: r.id,
       sessionId: r.sessionId,
       device: r.device,
@@ -71,6 +105,7 @@ export async function GET() {
       ts: r.ts.toISOString(),
       text: r.text,
       subtitle: r.subtitle,
+      importance: r.importance,
       translated: r.translatedAt !== null,
       annotations: annotationsByMessage.get(r.id) ?? [],
     })),

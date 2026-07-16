@@ -38,6 +38,7 @@ For each agent message you produce, via the emit_translation tool:
 2. "subtitle" — 1-3 plain-language sentences: what the agent is doing and why it matters. Rewrite for the user's level. Preserve concrete outcomes (numbers, pass/fail, file names) verbatim. Never editorialize or soften warnings/errors.
 3. "annotations" — for each piece of jargon in the original worth explaining: the exact span as it appears in the text, a plain-language rewrite of the sentence containing it, and term_ref naming the canonical term it belongs to (if any).
 4. "terms" — glossary entries for terms a non-expert wouldn't know, skipping common words and terms already in the user's known list. Reuse existing domain labels when close (e.g. don't create "Numerics" if "Numerical Methods" exists). level1 is a one-line explanation. salience 0-1 rates how central the term is to understanding this message.
+5. "importance" — 0-1: how much a busy user catching up needs THIS message. 0.9-1.0 = failures, risky decisions, final outcomes; 0.7-0.8 = plans and meaningful intermediate results; 0.3-0.6 = routine progress narration; 0-0.2 = filler. Errors and failures are always ≥ 0.9.
 
 ${TRUST_RULES}`;
 }
@@ -90,7 +91,8 @@ You are running headless. Reply with ONLY one JSON object — no prose, no markd
   ],
   "terms": [                  // at most 6 new glossary terms, most salient first, [] if none
     { "term": string, "domain": "short domain label", "level1": "one-line explanation", "salience": 0-1 }
-  ]
+  ],
+  "importance": 0-1           // how much a busy user needs this message (failures/outcomes ≥ 0.9)
 }
 
 Agent message:
@@ -213,7 +215,69 @@ export const translationTool = {
           required: ["term", "domain", "level1", "salience"],
         },
       },
+      importance: {
+        type: "number",
+        description:
+          "0-1: how much a busy user catching up needs this message. Failures, risky decisions, and final outcomes ≥ 0.9; plans/meaningful results 0.7-0.8; routine narration 0.3-0.6; filler ≤ 0.2.",
+      },
     },
     required: ["skip"],
   },
 };
+
+// --- Session digests (collapse hours/days of stream into rollup cards) ----
+//
+// Digests summarize a contiguous run of already-translated messages using
+// their SUBTITLES (already compressed), so a whole afternoon rolls up in one
+// small call. Same trust rules: a digest is a collapse, never a spin layer.
+
+export function digestSystemPrompt(): string {
+  return `You are unjargon, a live subtitle layer for AI agents. The user was away while their agent worked; you are writing the rollup card that stands in for a stretch of the message stream.
+
+Write a digest of the agent activity below in 2-4 plain-language sentences: what the agent set out to do, what actually happened, and where things stand now.
+
+Rules (non-negotiable):
+- never soften failures: if anything failed, errored, or was left broken or unresolved, the digest MUST say so plainly — an unresolved failure belongs in the FIRST sentence
+- copy numbers, outcomes, and file names verbatim
+- describe outcomes, not process: "swapped RK4 for BDF, 12 tests pass, 40× faster" beats a play-by-play
+- plain language for a non-expert; do not introduce jargon the lines below don't already explain`;
+}
+
+export function digestUserPrompt(input: {
+  projectName?: string | null;
+  lines: string[]; // "[HH:MM] subtitle-or-text" entries, oldest first
+}): string {
+  return `Project directory (context hint): ${input.projectName ?? "(unknown)"}
+
+Agent activity, oldest first:
+${input.lines.join("\n")}`;
+}
+
+export const digestTool = {
+  name: "emit_digest",
+  description: "Emit the rollup digest for one stretch of agent activity.",
+  input_schema: {
+    type: "object" as const,
+    properties: {
+      summary: {
+        type: "string",
+        description: "2-4 plain-language sentences; failures first, outcomes verbatim",
+      },
+    },
+    required: ["summary"],
+  },
+};
+
+// Headless variant for collectors doing digest work with the user's own AI
+// CLI (served via GET /api/work/digest — prompting stays in this file).
+export function localDigestPrompt(input: {
+  projectName?: string | null;
+  lines: string[];
+}): string {
+  return `${digestSystemPrompt()}
+
+You are running headless. Reply with ONLY one JSON object, no prose, no markdown fences:
+{ "summary": "2-4 plain-language sentences" }
+
+${digestUserPrompt(input)}`;
+}

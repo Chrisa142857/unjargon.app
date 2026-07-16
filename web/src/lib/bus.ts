@@ -27,6 +27,7 @@ export type TranslationEvent = {
   messageId: number;
   sessionId: number;
   subtitle: string | null;
+  importance: number | null;
   annotations: {
     id: number;
     span: string;
@@ -42,7 +43,22 @@ export type TranslationEvent = {
   }[];
 };
 
-export type StreamEvent = MessageEvent | TranslationEvent;
+// A rollup card replacing messages [fromMessageId, toMessageId] in the stream.
+export type DigestEvent = {
+  type: "digest";
+  digest: {
+    id: number;
+    sessionId: number;
+    fromMessageId: number;
+    toMessageId: number;
+    fromTs: string;
+    toTs: string;
+    messageCount: number;
+    summary: string;
+  };
+};
+
+export type StreamEvent = MessageEvent | TranslationEvent | DigestEvent;
 
 const globalForBus = globalThis as unknown as { __unjargonBus?: EventEmitter };
 

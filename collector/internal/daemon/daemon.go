@@ -9,6 +9,7 @@
 package daemon
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -21,6 +22,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/chrisa142857/unjargon.app/collector/internal/aicli"
@@ -47,12 +49,13 @@ type tracked struct {
 }
 
 type Daemon struct {
-	cfg     Config
-	queue   *buffer.Queue
-	mu      sync.Mutex
-	tailers map[string]*tracked
-	offsets *offsetStore
-	started time.Time
+	cfg        Config
+	queue      *buffer.Queue
+	mu         sync.Mutex
+	tailers    map[string]*tracked
+	offsets    *offsetStore
+	started    time.Time
+	digestBusy atomic.Bool
 }
 
 func New(cfg Config) (*Daemon, error) {
@@ -102,6 +105,8 @@ func (d *Daemon) Run() error {
 	defer flushTick.Stop()
 	pollTick := time.NewTicker(d.cfg.Interval)
 	defer pollTick.Stop()
+	digestTick := time.NewTicker(30 * time.Second)
+	defer digestTick.Stop()
 
 	d.scan()
 	d.poll()
@@ -114,7 +119,75 @@ func (d *Daemon) Run() error {
 			if n, err := d.queue.Flush(d.cfg.Shipper.SendRaw); n > 0 || err != nil {
 				log.Printf("offline queue: flushed %d, %d left (err=%v)", n, d.queue.Len(), err)
 			}
+		case <-digestTick.C:
+			// Digest work runs in its own goroutine — an AI call can take a
+			// minute and must not stall message tailing.
+			if d.cfg.Translator != nil && d.digestBusy.CompareAndSwap(false, true) {
+				go func() {
+					defer d.digestBusy.Store(false)
+					d.digestWork()
+				}()
+			}
 		}
+	}
+}
+
+// digestWork pulls pending digest chunks from the server (created when a
+// session accumulates enough history) and summarizes them with the user's
+// own AI CLI — the digest analogue of local-translate mode. The server
+// serves this work only when it cannot call an LLM itself.
+func (d *Daemon) digestWork() {
+	client := &http.Client{Timeout: 30 * time.Second}
+	for range 5 { // bounded per cycle
+		req, err := http.NewRequest(http.MethodGet, d.cfg.Shipper.ServerURL+"/api/work/digest", nil)
+		if err != nil {
+			return
+		}
+		req.Header.Set("Authorization", "Bearer "+d.cfg.Shipper.Token)
+		resp, err := client.Do(req)
+		if err != nil {
+			return
+		}
+		if resp.StatusCode == http.StatusNoContent {
+			resp.Body.Close()
+			return
+		}
+		var work struct {
+			ID     int    `json:"id"`
+			Prompt string `json:"prompt"`
+		}
+		err = json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&work)
+		resp.Body.Close()
+		if err != nil || work.ID == 0 || work.Prompt == "" {
+			return
+		}
+
+		out, err := d.cfg.Translator.Complete(work.Prompt)
+		if err != nil {
+			log.Printf("digest work %d: AI call failed: %v", work.ID, err)
+			return
+		}
+		summary, err := aicli.ExtractSummary(out)
+		if err != nil {
+			log.Printf("digest work %d: %v", work.ID, err)
+			return
+		}
+		body, _ := json.Marshal(map[string]string{"summary": summary})
+		post, err := http.NewRequest(http.MethodPost,
+			fmt.Sprintf("%s/api/work/digest/%d", d.cfg.Shipper.ServerURL, work.ID),
+			bytes.NewReader(body))
+		if err != nil {
+			return
+		}
+		post.Header.Set("Content-Type", "application/json")
+		post.Header.Set("Authorization", "Bearer "+d.cfg.Shipper.Token)
+		postResp, err := client.Do(post)
+		if err != nil {
+			log.Printf("digest work %d: deliver failed: %v", work.ID, err)
+			return
+		}
+		postResp.Body.Close()
+		log.Printf("digest work %d: summarized and delivered", work.ID)
 	}
 }
 

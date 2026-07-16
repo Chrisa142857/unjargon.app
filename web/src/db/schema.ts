@@ -42,9 +42,34 @@ export const messages = pgTable("messages", {
   ts: timestamp("ts", { withTimezone: true }).notNull(),
   text: text("text").notNull(),
   subtitle: text("subtitle"),
+  // 0-1, from the translation call: how much a catching-up user needs this
+  // message. Drives the highlights filter.
+  importance: real("importance"),
   translatedAt: timestamp("translated_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
 });
+
+// A rollup card standing in for a contiguous, already-translated stretch of
+// one session's stream ([fromMessageId, toMessageId]). summary '' = claimed
+// by a collector worker but not yet delivered (local-translate digest work).
+export const digests = pgTable(
+  "digests",
+  {
+    id: serial("id").primaryKey(),
+    sessionId: integer("session_id")
+      .notNull()
+      .references(() => sessions.id),
+    fromMessageId: integer("from_message_id").notNull(),
+    toMessageId: integer("to_message_id").notNull(),
+    fromTs: timestamp("from_ts", { withTimezone: true }).notNull(),
+    toTs: timestamp("to_ts", { withTimezone: true }).notNull(),
+    messageCount: integer("message_count").notNull(),
+    summary: text("summary").notNull().default(""),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  // Two workers racing for the same chunk: second insert fails, work not duplicated.
+  (t) => [uniqueIndex("digests_session_from").on(t.sessionId, t.fromMessageId)],
+);
 
 // A jargon term with layered explanations: L1 one-liner (eager, from
 // extraction), L2 basic concept and L3 "why it's used in your session"

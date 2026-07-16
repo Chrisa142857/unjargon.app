@@ -27,6 +27,7 @@ type Translation struct {
 	Subtitle    string       `json:"subtitle,omitempty"`
 	Annotations []Annotation `json:"annotations,omitempty"`
 	Terms       []Term       `json:"terms,omitempty"`
+	Importance  float64      `json:"importance,omitempty"`
 }
 
 type Annotation struct {

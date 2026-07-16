@@ -109,8 +109,22 @@ func (t *Translator) Translate(msg *parse.AgentMessage) error {
 	if err != nil {
 		return fmt.Errorf("fetch prompt template: %w", err)
 	}
-	prompt := strings.Replace(tmpl, "{{MESSAGE}}", msg.Text, 1)
+	out, err := t.Complete(strings.Replace(tmpl, "{{MESSAGE}}", msg.Text, 1))
+	if err != nil {
+		return err
+	}
+	result, err := extractTranslation([]byte(out))
+	if err != nil {
+		return err
+	}
+	msg.Translation = result
+	return nil
+}
 
+// Complete runs an arbitrary prompt through the user's AI CLI and returns the
+// raw output (a claude-style JSON envelope or bare text). Used for digest
+// work fetched from the server.
+func (t *Translator) Complete(prompt string) (string, error) {
 	args := append([]string(nil), t.Command[1:]...)
 	if t.Command[0] == "claude" && t.Model != "" {
 		args = append([]string{"--model", t.Model}, args...)
@@ -126,18 +140,43 @@ func (t *Translator) Translate(msg *parse.AgentMessage) error {
 			cmd.Process.Kill()
 		}
 	})
-	err = cmd.Run()
+	err := cmd.Run()
 	timer.Stop()
 	if err != nil {
-		return fmt.Errorf("%s: %v (%s)", t.Command[0], err, firstLine(stderr.String()))
+		return "", fmt.Errorf("%s: %v (%s)", t.Command[0], err, firstLine(stderr.String()))
 	}
+	return stdout.String(), nil
+}
 
-	result, err := extractTranslation(stdout.Bytes())
-	if err != nil {
-		return err
+// ExtractSummary pulls {"summary": ...} out of CLI output (envelope, fenced,
+// or bare JSON) — the digest-work response format.
+func ExtractSummary(out string) (string, error) {
+	text := out
+	var envelope struct {
+		Result  string `json:"result"`
+		IsError bool   `json:"is_error"`
 	}
-	msg.Translation = result
-	return nil
+	if err := json.Unmarshal([]byte(out), &envelope); err == nil && envelope.Result != "" {
+		if envelope.IsError {
+			return "", fmt.Errorf("AI CLI reported an error: %.120s", envelope.Result)
+		}
+		text = envelope.Result
+	}
+	start := strings.Index(text, "{")
+	end := strings.LastIndex(text, "}")
+	if start < 0 || end <= start {
+		return "", fmt.Errorf("no JSON object in AI output: %.120q", text)
+	}
+	var body struct {
+		Summary string `json:"summary"`
+	}
+	if err := json.Unmarshal([]byte(text[start:end+1]), &body); err != nil {
+		return "", fmt.Errorf("bad digest JSON: %v", err)
+	}
+	if strings.TrimSpace(body.Summary) == "" {
+		return "", fmt.Errorf("empty digest summary")
+	}
+	return strings.TrimSpace(body.Summary), nil
 }
 
 // extractTranslation handles both a claude-CLI JSON envelope ({"result":

@@ -1,5 +1,6 @@
 import { db, tables } from "@/db";
 import { publish } from "@/lib/bus";
+import { scheduleDigestCheck } from "@/lib/digest";
 import {
   scheduleTranslation,
   storeProvidedTranslation,
@@ -113,6 +114,8 @@ export async function POST(req: Request) {
   }
   if (needServerTranslation) {
     scheduleTranslation(session.id);
+  } else {
+    scheduleDigestCheck(session.id); // everything translated; roll up if due
   }
 
   return Response.json({ stored: stored.length });

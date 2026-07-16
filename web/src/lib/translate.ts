@@ -2,6 +2,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import { asc, eq, isNull } from "drizzle-orm";
 import { db, tables } from "@/db";
 import { publish } from "@/lib/bus";
+import { scheduleDigestCheck } from "@/lib/digest";
 import {
   TRANSLATION_MODEL,
   translationSystemPrompt,
@@ -24,6 +25,7 @@ export type TranslationResult = {
   subtitle?: string;
   annotations?: { span: string; sentence_rewrite: string; term_ref?: string }[];
   terms?: { term: string; domain: string; level1: string; salience: number }[];
+  importance?: number;
 };
 
 const globalForTranslate = globalThis as unknown as {
@@ -61,7 +63,10 @@ async function drainSession(sessionId: number) {
         .where(isNull(tables.messages.translatedAt))
         .orderBy(asc(tables.messages.id));
       const mine = pending.filter((m) => m.sessionId === sessionId);
-      if (mine.length === 0) return;
+      if (mine.length === 0) {
+        scheduleDigestCheck(sessionId); // roll up older messages if due
+        return;
+      }
       for (const msg of mine) {
         await translateMessage(msg);
       }
@@ -124,7 +129,17 @@ function sanitize(result: TranslationResult, text: string): TranslationResult {
       domain: t.domain?.trim() || "General",
       salience: Math.min(1, Math.max(0, Number(t.salience) || 0.5)),
     }));
-  return { skip: false, subtitle: result.subtitle.trim(), annotations, terms };
+  const importance =
+    result.importance === undefined
+      ? 0.5
+      : Math.min(1, Math.max(0, Number(result.importance) || 0));
+  return {
+    skip: false,
+    subtitle: result.subtitle.trim(),
+    annotations,
+    terms,
+    importance,
+  };
 }
 
 async function callTranslator(
@@ -182,10 +197,11 @@ async function storeResult(
 ) {
   const now = new Date();
   const subtitle = result.skip ? null : (result.subtitle ?? null);
+  const importance = result.skip ? 0 : (result.importance ?? 0.5);
 
   await db
     .update(tables.messages)
-    .set({ subtitle, translatedAt: now })
+    .set({ subtitle, importance, translatedAt: now })
     .where(eq(tables.messages.id, msg.id));
 
   const storedAnnotations: TranslationEventAnnotations = [];
@@ -267,6 +283,7 @@ async function storeResult(
     messageId: msg.id,
     sessionId: msg.sessionId,
     subtitle,
+    importance,
     annotations: storedAnnotations,
     newTerms,
   });
@@ -305,6 +322,7 @@ const FAKE_FIXTURE: {
       skip: false,
       subtitle:
         "Looking through your simulation code for the part that advances time step by step — that's the usual suspect when runs are slow or crash with NaNs.",
+      importance: 0.5,
       annotations: [
         {
           span: "integrator",
@@ -343,6 +361,7 @@ const FAKE_FIXTURE: {
       skip: false,
       subtitle:
         "Your system mixes very fast and very slow changes (\"stiff\"), which makes the current solver unstable — that's where the NaN blowups come from. It's switching to a solver that stays stable with big time steps (BDF via scipy.integrate.solve_ivp), then re-running the regression tests to confirm nothing changes numerically.",
+      importance: 0.85,
       annotations: [
         {
           span: "stiff",
@@ -520,6 +539,7 @@ const FAKE_FIXTURE: {
       skip: false,
       subtitle:
         "Done — all 12 regression tests pass and the benchmark now finishes in 3.1s vs 127.4s, about 40× faster. The NaN blowups should be gone because the new solver stays stable on stiff systems. Note: test_energy_conservation was already marked as expected-to-fail before this change and was left that way.",
+      importance: 0.95,
       annotations: [
         {
           span: "A-stable",
@@ -572,5 +592,5 @@ function fakeTranslate(text: string): TranslationResult {
     if (text.includes(f.match)) return f.result;
   }
   const sentences = text.split(/(?<=[.!?])\s+/).slice(0, 2).join(" ");
-  return { skip: false, subtitle: sentences, annotations: [], terms: [] };
+  return { skip: false, subtitle: sentences, annotations: [], terms: [], importance: 0.4 };
 }

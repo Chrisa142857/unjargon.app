@@ -30,9 +30,24 @@ export type LiveMessage = {
   ts: string;
   text: string;
   subtitle: string | null;
+  importance: number | null;
   translated: boolean; // false → translation in flight (typing indicator)
   annotations: LiveAnnotation[];
 };
+
+// A rollup card standing in for a collapsed stretch of the stream.
+export type LiveDigest = {
+  id: number;
+  sessionId: number;
+  fromMessageId: number;
+  toMessageId: number;
+  fromTs: string;
+  toTs: string;
+  messageCount: number;
+  summary: string;
+};
+
+const HIGHLIGHT_THRESHOLD = 0.7;
 
 function timeOf(ts: string) {
   return new Date(ts).toLocaleTimeString([], {
@@ -61,7 +76,9 @@ const CALIBRATION_LABELS: [Calibration, string][] = [
 // the static GitHub Pages build works against a remote API.
 export default function LiveStream() {
   const [messages, setMessages] = useState<LiveMessage[]>([]);
+  const [digests, setDigests] = useState<LiveDigest[]>([]);
   const [terms, setTerms] = useState<LiveTerm[]>([]);
+  const [highlights, setHighlights] = useState(false);
   const [loaded, setLoaded] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [connected, setConnected] = useState(false);
@@ -93,6 +110,12 @@ export default function LiveStream() {
         setTerms((live) => {
           const seen = new Set<number>(data.terms.map((t: LiveTerm) => t.id));
           return [...data.terms, ...live.filter((t) => !seen.has(t.id))];
+        });
+        setDigests((live) => {
+          const seen = new Set<number>(
+            data.digests.map((d: LiveDigest) => d.id),
+          );
+          return [...data.digests, ...live.filter((d) => !seen.has(d.id))];
         });
         setCalibration(data.calibration);
       } catch (err) {
@@ -138,11 +161,28 @@ export default function LiveStream() {
       if (event.type === "message") {
         const m: LiveMessage = {
           ...event.message,
+          importance: null,
           translated: false,
           annotations: [],
         };
         setMessages((prev) =>
           prev.some((p) => p.id === m.id) ? prev : [...prev, m],
+        );
+      } else if (event.type === "digest") {
+        // A stretch of the stream just rolled up: swap those messages for the card.
+        const d: LiveDigest = event.digest;
+        setDigests((prev) =>
+          prev.some((p) => p.id === d.id)
+            ? prev
+            : [...prev, d].sort((a, b) => a.fromMessageId - b.fromMessageId),
+        );
+        setMessages((prev) =>
+          prev.filter(
+            (m) =>
+              m.sessionId !== d.sessionId ||
+              m.id < d.fromMessageId ||
+              m.id > d.toMessageId,
+          ),
         );
       } else if (event.type === "translation") {
         setMessages((prev) =>
@@ -151,6 +191,7 @@ export default function LiveStream() {
               ? {
                   ...m,
                   subtitle: event.subtitle,
+                  importance: event.importance,
                   translated: true,
                   annotations: event.annotations,
                 }
@@ -215,6 +256,17 @@ export default function LiveStream() {
             wiki
           </Link>
           <button
+            onClick={() => setHighlights((v) => !v)}
+            title="only decisions, outcomes, and failures"
+            className={`rounded-md border px-2 py-1 text-xs transition-colors ${
+              highlights
+                ? "border-emerald-300/40 bg-emerald-300/10 text-emerald-200"
+                : "border-neutral-700 text-neutral-400 hover:text-neutral-100"
+            }`}
+          >
+            ★ highlights
+          </button>
+          <button
             onClick={() => setShowOriginals((v) => !v)}
             title="toggle subtitles ⇄ originals (⌘J)"
             className={`rounded-md border px-2 py-1 text-xs transition-colors ${
@@ -246,7 +298,7 @@ export default function LiveStream() {
         className="flex-1 overflow-y-auto px-4 py-6"
       >
         <div className="mx-auto flex max-w-2xl flex-col gap-7">
-          {messages.length === 0 && (
+          {messages.length === 0 && digests.length === 0 && (
             <p className="mt-24 text-center text-neutral-500">
               {!loaded ? (
                 "loading…"
@@ -262,15 +314,32 @@ export default function LiveStream() {
               )}
             </p>
           )}
-          {messages.map((m) => (
-            <MessageRow
-              key={m.id}
-              message={m}
+          {digests.map((d) => (
+            <DigestCard
+              key={`d${d.id}`}
+              digest={d}
               termsById={termsById}
               showOriginal={showOriginals}
               onOpenTerm={(termId, messageId) => setCard({ termId, messageId })}
             />
           ))}
+          {messages
+            .filter(
+              (m) =>
+                !highlights ||
+                (m.translated &&
+                  m.subtitle !== null &&
+                  (m.importance ?? 0) >= HIGHLIGHT_THRESHOLD),
+            )
+            .map((m) => (
+              <MessageRow
+                key={m.id}
+                message={m}
+                termsById={termsById}
+                showOriginal={showOriginals}
+                onOpenTerm={(termId, messageId) => setCard({ termId, messageId })}
+              />
+            ))}
           <div ref={bottomRef} />
         </div>
       </div>
@@ -404,6 +473,83 @@ function CardSection({
         <div className="animate-pulse space-y-2" aria-label="loading">
           <div className="h-3 w-full rounded bg-neutral-800" />
           <div className="h-3 w-5/6 rounded bg-neutral-800" />
+        </div>
+      )}
+    </section>
+  );
+}
+
+function rangeOf(d: LiveDigest): string {
+  const from = new Date(d.fromTs);
+  const to = new Date(d.toTs);
+  const sameDay = from.toDateString() === to.toDateString();
+  const day = (x: Date) =>
+    x.toLocaleDateString([], { weekday: "short", month: "short", day: "numeric" });
+  const hm = (x: Date) =>
+    x.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  return sameDay
+    ? `${day(from)} ${hm(from)} – ${hm(to)}`
+    : `${day(from)} ${hm(from)} – ${day(to)} ${hm(to)}`;
+}
+
+// A collapsed stretch of the stream: a rollup summary standing in for
+// messageCount messages. Expanding fetches and shows the real subtitles —
+// a digest is a collapse, never a substitute.
+function DigestCard({
+  digest: d,
+  termsById,
+  showOriginal,
+  onOpenTerm,
+}: {
+  digest: LiveDigest;
+  termsById: Map<number, LiveTerm>;
+  showOriginal: boolean;
+  onOpenTerm: (termId: number, messageId: number) => void;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const [inner, setInner] = useState<LiveMessage[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  async function toggle() {
+    const next = !expanded;
+    setExpanded(next);
+    if (next && inner === null) {
+      try {
+        const res = await fetch(api(`/api/digests/${d.id}/messages`));
+        if (!res.ok) throw new Error(`fetch failed (${res.status})`);
+        const data = await res.json();
+        setInner(data.messages);
+      } catch (err) {
+        setError(String(err));
+      }
+    }
+  }
+
+  return (
+    <section className="rounded-xl border border-neutral-800 bg-neutral-900/50">
+      <button onClick={toggle} className="w-full px-4 py-3 text-left">
+        <p className="mb-1 text-[10px] uppercase tracking-widest text-neutral-500">
+          {rangeOf(d)} · {d.messageCount} updates {expanded ? "▾" : "▸"}
+        </p>
+        <p className="text-base leading-relaxed text-neutral-200">{d.summary}</p>
+      </button>
+      {expanded && (
+        <div className="flex flex-col gap-6 border-t border-neutral-800 px-4 py-4">
+          {error && (
+            <p className="text-sm text-red-400/90">couldn&apos;t load — {error}</p>
+          )}
+          {inner === null && !error && (
+            <p className="text-sm text-neutral-500">loading…</p>
+          )}
+          {inner?.map((m) => (
+            <MessageRow
+              key={m.id}
+              message={m}
+              termsById={termsById}
+              showOriginal={showOriginal}
+              onOpenTerm={onOpenTerm}
+            />
+          ))}
         </div>
       )}
     </section>
