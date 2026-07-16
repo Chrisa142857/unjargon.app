@@ -28,6 +28,29 @@ plus a click-to-learn glossary in the browser. Observability for humans, not eng
   agent message, with the annotated original one tap away and layered term cards
   (L1/L2/L3) behind every highlighted term.
 
+## Install a collector (any machine your agents run on)
+
+```sh
+curl -fsSL https://unjargon.app/install.sh | sh -s -- --token uj_xxx
+```
+
+No root, no runtime deps. The installer drops a single static binary in
+`~/.local/bin`, registers a Claude Code `SessionStart` hook (so the collector is
+told the exact transcript path the moment a session starts — directory watching
+of `~/.claude/projects/**` remains as fallback), and starts `unjargond` as a
+user-level service: launchd on macOS, `systemd --user` on Linux, or a plain
+background process with a PID file on HPC login nodes without user sessions.
+
+Collector guarantees:
+
+- **Polling tailer (~2s mtime), byte offsets, complete lines only** — works on
+  NFS/Lustre where inotify silently fails; offsets persist across restarts so
+  nothing is shipped twice.
+- **Redaction before anything leaves the machine** — common API-key/token
+  formats, PEM blocks, JWTs, and `.env`-like blobs are stripped client-side.
+- **Offline buffer** — failed batches queue on disk and flush with backoff when
+  the network returns (HPC networks flake).
+
 ## Development
 
 ```sh
@@ -35,15 +58,20 @@ plus a click-to-learn glossary in the browser. Observability for humans, not eng
 cd web
 cp .env.example .env.local   # fill in DATABASE_URL, ANTHROPIC_API_KEY, INGEST_TOKEN
 npm install
+npx drizzle-kit push         # create tables
 npm run dev
 
 # collector
 cd collector
-go build ./cmd/unjargond
+go test ./... && go build -o unjargond ./cmd/unjargond
 ./unjargond replay fixtures/session.jsonl   # deterministic demo replay
+./unjargond run                             # full daemon (hook + dir discovery)
+./unjargond run -file path/to/session.jsonl # single-file mode
 ```
 
-Secrets live in env vars only — never commit keys.
+Secrets live in env vars only — never commit keys. Without an
+`ANTHROPIC_API_KEY`, set `UNJARGON_FAKE_TRANSLATOR=1` for a deterministic
+offline translator (dev/demo fallback; loudly logged, never silent).
 
 ## Docs
 

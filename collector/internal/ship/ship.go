@@ -1,4 +1,6 @@
 // Package ship posts batches of agent messages to the unjargon web app.
+// Message text passes through the redaction pass on batch construction, so
+// secrets never leave the machine — not even into the offline queue.
 package ship
 
 import (
@@ -9,6 +11,7 @@ import (
 	"time"
 
 	"github.com/chrisa142857/unjargon.app/collector/internal/parse"
+	"github.com/chrisa142857/unjargon.app/collector/internal/redact"
 )
 
 type Shipper struct {
@@ -19,43 +22,60 @@ type Shipper struct {
 	Client    *http.Client
 }
 
-type wireMessage struct {
+type Message struct {
 	TS   string `json:"ts"`
 	Text string `json:"text"`
 }
 
-type wireBatch struct {
-	Device    string        `json:"device"`
-	Tool      string        `json:"tool"`
-	SessionID string        `json:"session_id"`
-	CWD       string        `json:"cwd"`
-	Messages  []wireMessage `json:"messages"`
+type Batch struct {
+	Device    string    `json:"device"`
+	Tool      string    `json:"tool"`
+	SessionID string    `json:"session_id"`
+	CWD       string    `json:"cwd"`
+	Messages  []Message `json:"messages"`
 }
 
-// Send posts one batch. All messages in a batch share a session (the tailer
-// works per transcript file, so this holds naturally). Retries a few times
-// with backoff; a full offline disk buffer comes in the hardening step.
-func (s *Shipper) Send(msgs []parse.AgentMessage) error {
+// FromMessages builds a redacted batch. All messages must share a session
+// (the tailer works per transcript file, so this holds naturally).
+func (s *Shipper) FromMessages(msgs []parse.AgentMessage) Batch {
 	if len(msgs) == 0 {
-		return nil
+		return Batch{}
 	}
-	batch := wireBatch{
+	b := Batch{
 		Device:    s.Device,
 		Tool:      s.Tool,
 		SessionID: msgs[0].SessionID,
 		CWD:       msgs[0].CWD,
 	}
 	for _, m := range msgs {
-		batch.Messages = append(batch.Messages, wireMessage{
+		b.Messages = append(b.Messages, Message{
 			TS:   m.Timestamp.UTC().Format(time.RFC3339Nano),
-			Text: m.Text,
+			Text: redact.Clean(m.Text),
 		})
 	}
-	body, err := json.Marshal(batch)
+	return b
+}
+
+// Send posts messages as one batch, with internal retry/backoff.
+func (s *Shipper) Send(msgs []parse.AgentMessage) error {
+	if len(msgs) == 0 {
+		return nil
+	}
+	return s.SendBatch(s.FromMessages(msgs))
+}
+
+func (s *Shipper) SendBatch(b Batch) error {
+	body, err := json.Marshal(b)
 	if err != nil {
 		return err
 	}
+	return s.SendRaw(body)
+}
 
+// SendRaw posts an already-marshaled batch (used when flushing the offline
+// queue). Retries transient failures with exponential backoff; auth and
+// malformed-request errors fail immediately.
+func (s *Shipper) SendRaw(body []byte) error {
 	client := s.Client
 	if client == nil {
 		client = &http.Client{Timeout: 15 * time.Second}

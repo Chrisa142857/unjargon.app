@@ -25,6 +25,16 @@ func New(path string) *Tailer {
 	return &Tailer{Path: path}
 }
 
+// NewAt resumes tailing from a persisted byte offset (daemon restarts) or
+// from the current end of a pre-existing file (skip old history).
+func NewAt(path string, offset int64) *Tailer {
+	return &Tailer{Path: path, offset: offset}
+}
+
+// Offset reports the byte position consumed so far (persisted by the daemon
+// so restarts don't re-ship history).
+func (t *Tailer) Offset() int64 { return t.offset }
+
 // Poll returns all complete lines appended since the last call. A missing
 // file is not an error (the session may not have started); truncation or
 // rotation resets the offset.
