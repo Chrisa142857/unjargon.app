@@ -1,0 +1,11 @@
+# env / secrets
+.env
+.env.*
+!.env.example
+
+# collector build artifacts
+collector/unjargond
+collector/dist/
+
+# misc
+.DS_Store
