@@ -53,6 +53,8 @@ export default async function LivePage() {
     term: t.term,
     domain: t.domain,
     l1: t.l1,
+    l2: t.l2,
+    l3: t.l3,
     salience: t.salience,
   }));
 

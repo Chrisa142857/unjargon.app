@@ -14,6 +14,8 @@ export type LiveTerm = {
   term: string;
   domain: string;
   l1: string;
+  l2: string | null;
+  l3: string | null;
   salience: number | null;
 };
 
@@ -55,6 +57,9 @@ export default function LiveStream({
   const [terms, setTerms] = useState<LiveTerm[]>(initialTerms);
   const [connected, setConnected] = useState(false);
   const [pinned, setPinned] = useState(true);
+  const [card, setCard] = useState<{ termId: number; messageId: number } | null>(
+    null,
+  );
   const bottomRef = useRef<HTMLDivElement>(null);
   const scrollerRef = useRef<HTMLDivElement>(null);
 
@@ -89,7 +94,10 @@ export default function LiveStream({
         if (event.newTerms.length > 0) {
           setTerms((prev) => {
             const seen = new Set(prev.map((t) => t.id));
-            return [...prev, ...event.newTerms.filter((t: LiveTerm) => !seen.has(t.id))];
+            const fresh = event.newTerms
+              .filter((t: LiveTerm) => !seen.has(t.id))
+              .map((t: LiveTerm) => ({ ...t, l2: t.l2 ?? null, l3: t.l3 ?? null }));
+            return [...prev, ...fresh];
           });
         }
       }
@@ -150,7 +158,12 @@ export default function LiveStream({
             </p>
           )}
           {messages.map((m) => (
-            <MessageRow key={m.id} message={m} termsById={termsById} />
+            <MessageRow
+              key={m.id}
+              message={m}
+              termsById={termsById}
+              onOpenTerm={(termId, messageId) => setCard({ termId, messageId })}
+            />
           ))}
           <div ref={bottomRef} />
         </div>
@@ -171,16 +184,134 @@ export default function LiveStream({
           </span>
         </footer>
       )}
+
+      {card && (
+        <TermCard
+          term={termsById.get(card.termId) ?? null}
+          messageId={card.messageId}
+          onClose={() => setCard(null)}
+          onExpanded={(termId, l2, l3) =>
+            setTerms((prev) =>
+              prev.map((t) => (t.id === termId ? { ...t, l2, l3 } : t)),
+            )
+          }
+        />
+      )}
     </main>
+  );
+}
+
+// L1/L2/L3 term card as a bottom sheet. L1 is already known (eager, from
+// extraction); L2/L3 are fetched on first open and cached server-side.
+function TermCard({
+  term,
+  messageId,
+  onClose,
+  onExpanded,
+}: {
+  term: LiveTerm | null;
+  messageId: number;
+  onClose: () => void;
+  onExpanded: (termId: number, l2: string, l3: string) => void;
+}) {
+  const [error, setError] = useState<string | null>(null);
+  const needsFetch = !!term && (!term.l2 || !term.l3);
+
+  useEffect(() => {
+    if (!term || !needsFetch) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch(`/api/terms/${term.id}/expand`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ messageId }),
+        });
+        if (!res.ok) throw new Error(`expand failed (${res.status})`);
+        const data = await res.json();
+        if (!cancelled) onExpanded(term.id, data.l2, data.l3);
+      } catch (err) {
+        if (!cancelled) setError(String(err));
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [term?.id]);
+
+  if (!term) return null;
+
+  return (
+    <div
+      className="fixed inset-0 z-10 flex items-end justify-center bg-black/60"
+      onClick={onClose}
+    >
+      <div
+        className="max-h-[80dvh] w-full max-w-2xl overflow-y-auto rounded-t-2xl border border-neutral-700 bg-neutral-900 p-5 pb-8"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="mb-3 flex items-start justify-between gap-3">
+          <div>
+            <h2 className="text-xl font-semibold">{term.term}</h2>
+            <span className="mt-1 inline-block rounded-full border border-neutral-700 px-2 py-0.5 text-xs text-neutral-400">
+              {term.domain}
+            </span>
+          </div>
+          <button
+            onClick={onClose}
+            className="rounded-full p-1.5 text-neutral-400 hover:bg-neutral-800 hover:text-neutral-100"
+            aria-label="close"
+          >
+            ✕
+          </button>
+        </div>
+
+        <p className="text-base leading-relaxed">{term.l1}</p>
+
+        <CardSection title="What it is" body={term.l2} error={error} />
+        <CardSection title="In your session" body={term.l3} error={error} />
+      </div>
+    </div>
+  );
+}
+
+function CardSection({
+  title,
+  body,
+  error,
+}: {
+  title: string;
+  body: string | null;
+  error: string | null;
+}) {
+  return (
+    <section className="mt-4">
+      <h3 className="mb-1 text-[10px] uppercase tracking-widest text-neutral-500">
+        {title}
+      </h3>
+      {body ? (
+        <p className="text-sm leading-relaxed text-neutral-200">{body}</p>
+      ) : error ? (
+        <p className="text-sm text-red-400/90">couldn&apos;t load — {error}</p>
+      ) : (
+        <div className="animate-pulse space-y-2" aria-label="loading">
+          <div className="h-3 w-full rounded bg-neutral-800" />
+          <div className="h-3 w-5/6 rounded bg-neutral-800" />
+        </div>
+      )}
+    </section>
   );
 }
 
 function MessageRow({
   message: m,
   termsById,
+  onOpenTerm,
 }: {
   message: LiveMessage;
   termsById: Map<number, LiveTerm>;
+  onOpenTerm: (termId: number, messageId: number) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
   const hasSubtitle = m.subtitle !== null;
@@ -221,6 +352,7 @@ function MessageRow({
                 text={m.text}
                 annotations={m.annotations}
                 termsById={termsById}
+                onOpenTerm={(termId) => onOpenTerm(termId, m.id)}
               />
             )}
           </div>
@@ -247,10 +379,12 @@ function AnnotatedOriginal({
   text,
   annotations,
   termsById,
+  onOpenTerm,
 }: {
   text: string;
   annotations: LiveAnnotation[];
   termsById: Map<number, LiveTerm>;
+  onOpenTerm: (termId: number) => void;
 }) {
   const [activeId, setActiveId] = useState<number | null>(null);
 
@@ -305,12 +439,18 @@ function AnnotatedOriginal({
         <div className="mt-2 rounded-md border border-amber-300/20 bg-amber-300/5 p-2.5 text-sm leading-relaxed text-amber-50/90">
           {active.sentenceRewrite}
           {activeTerm && (
-            <p className="mt-1.5 text-xs text-neutral-400">
+            <button
+              onClick={() => onOpenTerm(activeTerm.id)}
+              className="mt-1.5 block w-full rounded-md p-1 text-left text-xs text-neutral-400 transition-colors hover:bg-neutral-800/80"
+            >
               <span className="font-semibold text-neutral-300">
                 {activeTerm.term}
               </span>{" "}
-              — {activeTerm.l1}
-            </p>
+              — {activeTerm.l1}{" "}
+              <span className="whitespace-nowrap text-neutral-500">
+                go deeper ▸
+              </span>
+            </button>
           )}
         </div>
       )}

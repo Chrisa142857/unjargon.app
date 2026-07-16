@@ -60,6 +60,57 @@ ${input.text}
 >>>`;
 }
 
+// --- Lazy term expansion (L2/L3, generated on first click, cached) --------
+
+export function expansionSystemPrompt(level: CalibrationLevel): string {
+  return `You are unjargon, a live glossary for users delegating work to AI agents. The user tapped a jargon term to go deeper. They are ${CALIBRATION_DESCRIPTIONS[level]}.
+
+Produce, via the emit_expansion tool:
+1. "level2" — the basic concept: 3-4 sentences with an everyday analogy, assuming no background in the domain.
+2. "level3" — why the agent is using this term in the user's actual session: ground it entirely in the provided source message and project; explain what the term means for THEIR work right now, so they can judge the agent's decision.
+
+Rules: never invent facts not supported by the source message; if the source message reports a failure or risk involving this term, say so plainly; keep numbers, outcomes, and file names verbatim.`;
+}
+
+export function expansionUserPrompt(input: {
+  term: string;
+  domain: string;
+  l1: string;
+  projectName?: string | null;
+  snippet: string;
+}): string {
+  return `Term: ${input.term}
+Domain: ${input.domain}
+Existing one-liner (L1): ${input.l1}
+Project directory (context hint): ${input.projectName ?? "(unknown)"}
+
+Source agent message the term appeared in:
+<<<
+${input.snippet}
+>>>`;
+}
+
+export const expansionTool = {
+  name: "emit_expansion",
+  description: "Emit the two deeper explanation layers for one glossary term.",
+  input_schema: {
+    type: "object" as const,
+    properties: {
+      level2: {
+        type: "string",
+        description:
+          "Basic concept: 3-4 sentences with an analogy, no assumed background",
+      },
+      level3: {
+        type: "string",
+        description:
+          "Why the agent is using it in this session, grounded in the source message",
+      },
+    },
+    required: ["level2", "level3"],
+  },
+};
+
 // Forced tool use gives us schema-validated strict JSON output.
 export const translationTool = {
   name: "emit_translation",
