@@ -7,6 +7,18 @@ unjargon watches agent transcripts (Claude Code, Codex) wherever your agents run
 laptop, remote box, HPC login node — and serves a live plain-language translation
 plus a click-to-learn glossary in the browser. Observability for humans, not engineers.
 
+- **`/live` — the Unjargon Stream.** Every agent message arrives already translated
+  into 1-3 plain sentences; trivial chatter passes through untouched. ▸ expands the
+  verbatim original with jargon highlighted; tap a highlight for a sentence-level
+  rewrite, go deeper for the L1/L2/L3 term card (L3 is grounded in *your* session).
+  ⌘/ctrl-J flips the whole stream to originals as you outgrow the subtitles, and the
+  calibration selector (new / technical amateur / expert) tunes every rewrite.
+- **`/wiki` — the durable glossary.** Everything your agents taught you, across all
+  machines and sessions, searchable and grouped by domain.
+- **Trust rules, enforced in the prompt and in code:** failures are never softened,
+  numbers/outcomes/filenames are copied verbatim, terms are never invented, and the
+  annotated original is always one tap away.
+
 ## How it works
 
 ```

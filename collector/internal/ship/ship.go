@@ -18,7 +18,6 @@ type Shipper struct {
 	ServerURL string // e.g. https://unjargon.app
 	Token     string // bearer device token
 	Device    string // human-readable device name (hostname by default)
-	Tool      string // "claude-code", "codex", ...
 	Client    *http.Client
 }
 
@@ -35,15 +34,15 @@ type Batch struct {
 	Messages  []Message `json:"messages"`
 }
 
-// FromMessages builds a redacted batch. All messages must share a session
-// (the tailer works per transcript file, so this holds naturally).
-func (s *Shipper) FromMessages(msgs []parse.AgentMessage) Batch {
+// FromMessages builds a redacted batch for one tool. All messages must share
+// a session (the tailer works per transcript file, so this holds naturally).
+func (s *Shipper) FromMessages(tool string, msgs []parse.AgentMessage) Batch {
 	if len(msgs) == 0 {
 		return Batch{}
 	}
 	b := Batch{
 		Device:    s.Device,
-		Tool:      s.Tool,
+		Tool:      tool,
 		SessionID: msgs[0].SessionID,
 		CWD:       msgs[0].CWD,
 	}
@@ -57,11 +56,11 @@ func (s *Shipper) FromMessages(msgs []parse.AgentMessage) Batch {
 }
 
 // Send posts messages as one batch, with internal retry/backoff.
-func (s *Shipper) Send(msgs []parse.AgentMessage) error {
+func (s *Shipper) Send(tool string, msgs []parse.AgentMessage) error {
 	if len(msgs) == 0 {
 		return nil
 	}
-	return s.SendBatch(s.FromMessages(msgs))
+	return s.SendBatch(s.FromMessages(tool, msgs))
 }
 
 func (s *Shipper) SendBatch(b Batch) error {

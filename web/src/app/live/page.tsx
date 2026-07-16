@@ -1,5 +1,6 @@
 import { desc, eq, inArray } from "drizzle-orm";
 import { db, tables } from "@/db";
+import { getCalibration } from "@/lib/settings";
 import LiveStream, {
   type LiveAnnotation,
   type LiveMessage,
@@ -71,5 +72,11 @@ export default async function LivePage() {
     annotations: annotationsByMessage.get(r.id) ?? [],
   }));
 
-  return <LiveStream initialMessages={initial} initialTerms={terms} />;
+  return (
+    <LiveStream
+      initialMessages={initial}
+      initialTerms={terms}
+      initialCalibration={await getCalibration()}
+    />
+  );
 }

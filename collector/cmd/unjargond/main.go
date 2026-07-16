@@ -133,20 +133,24 @@ func cmdRun(args []string) {
 	fs := flag.NewFlagSet("run", flag.ExitOnError)
 	server, token, device := commonFlags(fs)
 	file := fs.String("file", "", "tail a single transcript file instead of running discovery")
+	defaultWatch := strings.Join([]string{
+		filepath.Join(home(), ".claude", "projects"),
+		filepath.Join(home(), ".codex", "sessions"),
+	}, ",")
 	listen := fs.String("listen", envOr("UNJARGON_LISTEN", "127.0.0.1:4577"), "hook-notification listen address ('' disables)")
-	watch := fs.String("watch", envOr("UNJARGON_WATCH", filepath.Join(home(), ".claude", "projects")), "comma-separated directories to scan for transcripts")
+	watch := fs.String("watch", envOr("UNJARGON_WATCH", defaultWatch), "comma-separated directories to scan for transcripts")
 	stateDir := fs.String("state", filepath.Join(stateHome(), "unjargond"), "state directory (offsets, offline queue, pid)")
 	interval := fs.Duration("interval", 2*time.Second, "poll interval")
 	fs.Parse(args)
 
-	parser := parse.ClaudeCode{}
-	shipper := &ship.Shipper{ServerURL: *server, Token: *token, Device: *device, Tool: parser.Tool()}
+	shipper := &ship.Shipper{ServerURL: *server, Token: *token, Device: *device}
 
 	// Single-file mode: the walking-skeleton path, still handy for tests
 	// and "just watch this one file" setups.
 	if *file != "" {
+		parser := parse.ForPath(*file)
 		tailer := tail.New(*file)
-		log.Printf("tailing %s → %s (device %q, poll %s)", *file, *server, *device, *interval)
+		log.Printf("tailing %s (%s) → %s (device %q, poll %s)", *file, parser.Tool(), *server, *device, *interval)
 		for {
 			lines, err := tailer.Poll()
 			if err != nil {
@@ -159,7 +163,7 @@ func cmdRun(args []string) {
 				}
 			}
 			if len(msgs) > 0 {
-				if err := shipper.Send(msgs); err != nil {
+				if err := shipper.Send(parser.Tool(), msgs); err != nil {
 					log.Printf("ship: %v", err)
 				} else {
 					log.Printf("shipped %d message(s)", len(msgs))
@@ -191,7 +195,6 @@ func cmdRun(args []string) {
 	}
 	d, err := daemon.New(daemon.Config{
 		Shipper:    shipper,
-		Parser:     parser,
 		WatchRoots: roots,
 		Listen:     *listen,
 		StateDir:   *stateDir,
@@ -265,8 +268,8 @@ func cmdReplay(args []string) {
 		log.Fatal("replay: exactly one fixture path required")
 	}
 
-	parser := parse.ClaudeCode{}
-	shipper := &ship.Shipper{ServerURL: *server, Token: *token, Device: *device, Tool: parser.Tool()}
+	parser := parse.ForPath(fixture)
+	shipper := &ship.Shipper{ServerURL: *server, Token: *token, Device: *device}
 	tailer := tail.New(fixture)
 	lines, err := tailer.Poll()
 	if err != nil {
@@ -282,7 +285,7 @@ func cmdReplay(args []string) {
 		if sent > 0 {
 			time.Sleep(*delay)
 		}
-		if err := shipper.Send([]parse.AgentMessage{m}); err != nil {
+		if err := shipper.Send(parser.Tool(), []parse.AgentMessage{m}); err != nil {
 			log.Fatalf("ship: %v", err)
 		}
 		sent++

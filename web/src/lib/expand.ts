@@ -7,6 +7,7 @@ import {
   expansionTool,
   expansionUserPrompt,
 } from "@/lib/prompts";
+import { getCalibration } from "@/lib/settings";
 
 // Lazy L2/L3 generation for a term, cached on the terms row. L3 is grounded
 // in a source message: the one the user tapped from when provided, else the
@@ -95,7 +96,7 @@ async function callExpander(input: {
   const resp = await client.messages.create({
     model: TRANSLATION_MODEL,
     max_tokens: 800,
-    system: expansionSystemPrompt("new"),
+    system: expansionSystemPrompt(await getCalibration()),
     messages: [{ role: "user", content: expansionUserPrompt(input) }],
     tools: [expansionTool],
     tool_choice: { type: "tool", name: "emit_expansion" },

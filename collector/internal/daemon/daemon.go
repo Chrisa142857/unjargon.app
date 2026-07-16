@@ -31,18 +31,24 @@ import (
 
 type Config struct {
 	Shipper    *ship.Shipper
-	Parser     parse.Parser
 	WatchRoots []string      // directories scanned for **/*.jsonl
 	Listen     string        // hook-notification address, e.g. 127.0.0.1:4577
 	StateDir   string        // offsets, offline queue, pid file
 	Interval   time.Duration // poll interval
 }
 
+// tracked pairs a tailer with its per-file parser (formats like Codex carry
+// session metadata only on the first line, so parsers hold per-file state).
+type tracked struct {
+	tailer *tail.Tailer
+	parser parse.Parser
+}
+
 type Daemon struct {
 	cfg     Config
 	queue   *buffer.Queue
 	mu      sync.Mutex
-	tailers map[string]*tail.Tailer
+	tailers map[string]*tracked
 	offsets *offsetStore
 	started time.Time
 }
@@ -62,7 +68,7 @@ func New(cfg Config) (*Daemon, error) {
 	return &Daemon{
 		cfg:     cfg,
 		queue:   q,
-		tailers: map[string]*tail.Tailer{},
+		tailers: map[string]*tracked{},
 		offsets: offsets,
 		started: time.Now(),
 	}, nil
@@ -172,7 +178,10 @@ func (d *Daemon) track(path string, fromHook bool) {
 			offset = st.Size()
 		}
 	}
-	d.tailers[path] = tail.NewAt(path, offset)
+	d.tailers[path] = &tracked{
+		tailer: tail.NewAt(path, offset),
+		parser: parse.ForPath(path),
+	}
 	src := "scan"
 	if fromHook {
 		src = "hook"
@@ -194,22 +203,22 @@ func (d *Daemon) poll() {
 	dirty := false
 	for _, path := range paths {
 		d.mu.Lock()
-		t := d.tailers[path]
+		tr := d.tailers[path]
 		d.mu.Unlock()
 
-		lines, err := t.Poll()
+		lines, err := tr.tailer.Poll()
 		if err != nil {
 			log.Printf("poll %s: %v", path, err)
 			continue
 		}
 		var msgs []parse.AgentMessage
 		for _, line := range lines {
-			if m, ok := d.cfg.Parser.ParseLine(line); ok {
+			if m, ok := tr.parser.ParseLine(line); ok {
 				msgs = append(msgs, m)
 			}
 		}
 		if len(msgs) > 0 {
-			batch := d.cfg.Shipper.FromMessages(msgs)
+			batch := d.cfg.Shipper.FromMessages(tr.parser.Tool(), msgs)
 			if err := d.cfg.Shipper.SendBatch(batch); err != nil {
 				log.Printf("ship failed, buffering %d message(s): %v", len(batch.Messages), err)
 				if qerr := d.queue.Push(batch); qerr != nil {
@@ -220,7 +229,7 @@ func (d *Daemon) poll() {
 			}
 		}
 		if len(lines) > 0 {
-			d.offsets.set(path, t.Offset())
+			d.offsets.set(path, tr.tailer.Offset())
 			dirty = true
 		}
 	}

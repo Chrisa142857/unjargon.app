@@ -84,3 +84,10 @@ export const termSightings = pgTable("term_sightings", {
     .notNull()
     .references(() => messages.id),
 });
+
+// Single-user key/value settings (calibration level etc.); becomes per-user
+// when auth lands.
+export const settings = pgTable("settings", {
+  key: text("key").primaryKey(),
+  value: text("value").notNull(),
+});

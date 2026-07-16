@@ -7,8 +7,8 @@ import {
   translationSystemPrompt,
   translationTool,
   translationUserPrompt,
-  type CalibrationLevel,
 } from "@/lib/prompts";
+import { getCalibration } from "@/lib/settings";
 
 // The translation pipeline: ingest calls scheduleTranslation(sessionId);
 // ~2s after the last message lands (streaming agents append in bursts, the
@@ -18,7 +18,6 @@ import {
 const DEBOUNCE_MS = 2000;
 // Below this, a message can't contain explainable jargon worth a call.
 const TRIVIAL_LENGTH = 20;
-const CALIBRATION: CalibrationLevel = "new"; // slider comes later; default stop
 
 type TranslationResult = {
   skip: boolean;
@@ -146,7 +145,7 @@ async function callTranslator(
   const resp = await client.messages.create({
     model: TRANSLATION_MODEL,
     max_tokens: 1500,
-    system: translationSystemPrompt(CALIBRATION),
+    system: translationSystemPrompt(await getCalibration()),
     messages: [
       {
         role: "user",
@@ -421,6 +420,89 @@ const FAKE_FIXTURE: {
   {
     match: "OK, running the tests now",
     result: { skip: true },
+  },
+  // Codex fixture (survey-analysis, the vibe-researcher story)
+  {
+    match: "bootstrap CIs for both waves",
+    result: {
+      skip: false,
+      subtitle:
+        "Your second survey round has far fewer people (214 vs 1,032), so the \"disappearing\" effect is probably just a smaller sample being noisier. It's going to measure the uncertainty around both results and formally test whether they actually differ.",
+      annotations: [
+        {
+          span: "power issue",
+          sentence_rewrite:
+            "With fewer respondents, a real effect can easily hide in the noise — the study may simply be too small to see it.",
+          term_ref: "statistical power",
+        },
+        {
+          span: "bootstrap CIs",
+          sentence_rewrite:
+            "It will estimate an uncertainty range around each wave's result by resampling your own data thousands of times.",
+          term_ref: "bootstrap CI",
+        },
+        {
+          span: "two-proportion z-test",
+          sentence_rewrite:
+            "Then a standard statistical test checks whether the two waves' rates genuinely differ.",
+          term_ref: "two-proportion z-test",
+        },
+      ],
+      terms: [
+        {
+          term: "statistical power",
+          domain: "Statistics",
+          level1:
+            "A study's ability to detect a real effect — small samples often can't.",
+          salience: 0.9,
+        },
+        {
+          term: "bootstrap CI",
+          domain: "Statistics",
+          level1:
+            "An uncertainty range built by resampling your own data many times.",
+          salience: 0.8,
+        },
+        {
+          term: "two-proportion z-test",
+          domain: "Statistics",
+          level1:
+            "A test of whether two percentages (e.g. from two survey waves) genuinely differ.",
+          salience: 0.7,
+        },
+      ],
+    },
+  },
+  {
+    match: "The waves are statistically consistent",
+    result: {
+      skip: false,
+      subtitle:
+        "Result: wave 1 effect 0.35 (range [0.31, 0.39]), wave 2 effect 0.34 (range [0.27, 0.41]), test p=0.41 — the two waves agree. The effect did not disappear; wave 2 is just too small to measure it precisely. The write-up is saved to analysis/wave_comparison.md.",
+      annotations: [
+        {
+          span: "p=0.41",
+          sentence_rewrite:
+            "A p-value this large means the difference between waves looks like chance, not a real change.",
+          term_ref: "p-value",
+        },
+        {
+          span: "underpowered",
+          sentence_rewrite:
+            "Wave 2 simply has too few respondents to pin the effect down precisely.",
+          term_ref: "statistical power",
+        },
+      ],
+      terms: [
+        {
+          term: "p-value",
+          domain: "Statistics",
+          level1:
+            "How plausible your result would be if there were actually no effect — big values mean \"could be chance\".",
+          salience: 0.8,
+        },
+      ],
+    },
   },
   {
     match: "all 12 regression tests pass",

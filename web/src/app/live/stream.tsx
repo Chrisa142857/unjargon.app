@@ -44,14 +44,25 @@ function projectOf(cwd: string | null) {
   return cwd.split("/").filter(Boolean).pop() ?? null;
 }
 
+export type Calibration = "new" | "amateur" | "expert";
+
+const CALIBRATION_LABELS: [Calibration, string][] = [
+  ["new", "new to this"],
+  ["amateur", "technical amateur"],
+  ["expert", "expert"],
+];
+
 // The Unjargon Stream: subtitles by default, ▸ expands the annotated
-// original, highlighted spans tap to a sentence-level rewrite.
+// original, highlighted spans tap to a sentence-level rewrite. ⌘/ctrl-J
+// flips the whole stream between subtitles and originals.
 export default function LiveStream({
   initialMessages,
   initialTerms,
+  initialCalibration,
 }: {
   initialMessages: LiveMessage[];
   initialTerms: LiveTerm[];
+  initialCalibration: Calibration;
 }) {
   const [messages, setMessages] = useState<LiveMessage[]>(initialMessages);
   const [terms, setTerms] = useState<LiveTerm[]>(initialTerms);
@@ -60,6 +71,29 @@ export default function LiveStream({
   const [card, setCard] = useState<{ termId: number; messageId: number } | null>(
     null,
   );
+  const [showOriginals, setShowOriginals] = useState(false);
+  const [calibration, setCalibration] = useState<Calibration>(initialCalibration);
+
+  // Global toggle: ⌘J / ctrl-J flips subtitles ⇄ originals everywhere.
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "j") {
+        e.preventDefault();
+        setShowOriginals((v) => !v);
+      }
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
+  async function changeCalibration(level: Calibration) {
+    setCalibration(level);
+    await fetch("/api/settings", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ calibration: level }),
+    }).catch(() => {});
+  }
   const bottomRef = useRef<HTMLDivElement>(null);
   const scrollerRef = useRef<HTMLDivElement>(null);
 
@@ -141,6 +175,37 @@ export default function LiveStream({
             {projectOf(latest.cwd) ? ` — ${projectOf(latest.cwd)}` : ""}
           </span>
         )}
+        <span className="ml-auto flex items-center gap-2">
+          <a
+            href="/wiki"
+            className="rounded-md border border-neutral-700 px-2 py-1 text-xs text-neutral-400 hover:text-neutral-100"
+          >
+            wiki
+          </a>
+          <button
+            onClick={() => setShowOriginals((v) => !v)}
+            title="toggle subtitles ⇄ originals (⌘J)"
+            className={`rounded-md border px-2 py-1 text-xs transition-colors ${
+              showOriginals
+                ? "border-amber-300/40 bg-amber-300/10 text-amber-200"
+                : "border-neutral-700 text-neutral-400 hover:text-neutral-100"
+            }`}
+          >
+            {showOriginals ? "originals" : "subtitles"}
+          </button>
+          <select
+            value={calibration}
+            onChange={(e) => changeCalibration(e.target.value as Calibration)}
+            title="explain like I'm…"
+            className="rounded-md border border-neutral-700 bg-neutral-950 px-1.5 py-1 text-xs text-neutral-400"
+          >
+            {CALIBRATION_LABELS.map(([value, label]) => (
+              <option key={value} value={value}>
+                {label}
+              </option>
+            ))}
+          </select>
+        </span>
       </header>
 
       <div
@@ -162,6 +227,7 @@ export default function LiveStream({
               key={m.id}
               message={m}
               termsById={termsById}
+              showOriginal={showOriginals}
               onOpenTerm={(termId, messageId) => setCard({ termId, messageId })}
             />
           ))}
@@ -307,10 +373,12 @@ function CardSection({
 function MessageRow({
   message: m,
   termsById,
+  showOriginal,
   onOpenTerm,
 }: {
   message: LiveMessage;
   termsById: Map<number, LiveTerm>;
+  showOriginal: boolean;
   onOpenTerm: (termId: number, messageId: number) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
@@ -335,6 +403,15 @@ function MessageRow({
           <p className="whitespace-pre-wrap text-lg leading-relaxed text-neutral-300">
             {m.text}
           </p>
+        ) : showOriginal ? (
+          // Global ⌘J mode: the verbatim original, highlights still tappable.
+          <AnnotatedOriginal
+            text={m.text}
+            annotations={m.annotations}
+            termsById={termsById}
+            onOpenTerm={(termId) => onOpenTerm(termId, m.id)}
+            bare
+          />
         ) : (
           <div>
             <p className="whitespace-pre-wrap text-lg leading-relaxed">
@@ -380,11 +457,13 @@ function AnnotatedOriginal({
   annotations,
   termsById,
   onOpenTerm,
+  bare = false,
 }: {
   text: string;
   annotations: LiveAnnotation[];
   termsById: Map<number, LiveTerm>;
   onOpenTerm: (termId: number) => void;
+  bare?: boolean; // ⌘J mode: no box/label, body-size text
 }) {
   const [activeId, setActiveId] = useState<number | null>(null);
 
@@ -410,11 +489,19 @@ function AnnotatedOriginal({
   const activeTerm = active?.termId ? termsById.get(active.termId) : null;
 
   return (
-    <div className="mt-2 rounded-lg border border-neutral-800 bg-neutral-900/60 p-3">
-      <p className="mb-1 text-[10px] uppercase tracking-widest text-neutral-500">
-        original
-      </p>
-      <p className="whitespace-pre-wrap text-sm leading-relaxed text-neutral-300">
+    <div
+      className={
+        bare ? "" : "mt-2 rounded-lg border border-neutral-800 bg-neutral-900/60 p-3"
+      }
+    >
+      {!bare && (
+        <p className="mb-1 text-[10px] uppercase tracking-widest text-neutral-500">
+          original
+        </p>
+      )}
+      <p
+        className={`whitespace-pre-wrap leading-relaxed text-neutral-300 ${bare ? "text-lg" : "text-sm"}`}
+      >
         {segments.map((s, i) =>
           s.kind === "text" ? (
             <span key={i}>{s.value}</span>
