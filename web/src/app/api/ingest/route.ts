@@ -1,5 +1,6 @@
 import { db, tables } from "@/db";
 import { publish } from "@/lib/bus";
+import { scheduleTranslation } from "@/lib/translate";
 
 export const dynamic = "force-dynamic";
 
@@ -91,6 +92,8 @@ export async function POST(req: Request) {
       },
     });
   }
+
+  scheduleTranslation(session.id);
 
   return Response.json({ stored: stored.length });
 }

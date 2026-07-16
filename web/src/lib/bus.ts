@@ -5,7 +5,7 @@ import { EventEmitter } from "node:events";
 // a single Railway-style service). If we ever deploy to serverless, swap the
 // internals for Postgres LISTEN/NOTIFY — the interface stays the same.
 
-export type StreamEvent = {
+export type MessageEvent = {
   type: "message";
   message: {
     id: number;
@@ -18,6 +18,31 @@ export type StreamEvent = {
     subtitle: string | null;
   };
 };
+
+// Result of the translation pipeline for one message. subtitle null means
+// passthrough: the message was trivial (skipped) or translation failed —
+// either way the client stops showing "translating" and renders raw text.
+export type TranslationEvent = {
+  type: "translation";
+  messageId: number;
+  sessionId: number;
+  subtitle: string | null;
+  annotations: {
+    id: number;
+    span: string;
+    sentenceRewrite: string;
+    termId: number | null;
+  }[];
+  newTerms: {
+    id: number;
+    term: string;
+    domain: string;
+    l1: string;
+    salience: number | null;
+  }[];
+};
+
+export type StreamEvent = MessageEvent | TranslationEvent;
 
 const globalForBus = globalThis as unknown as { __unjargonBus?: EventEmitter };
 

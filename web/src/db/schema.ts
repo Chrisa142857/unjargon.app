@@ -1,6 +1,7 @@
 import {
   integer,
   pgTable,
+  real,
   serial,
   text,
   timestamp,
@@ -30,8 +31,9 @@ export const sessions = pgTable(
   (t) => [uniqueIndex("sessions_device_key").on(t.deviceId, t.sessionKey)],
 );
 
-// One assistant message. `subtitle` is filled by the translation pipeline
-// (step 3); null means untranslated / raw passthrough.
+// One assistant message. The translation pipeline fills `subtitle`;
+// translatedAt set with subtitle null = passthrough (trivial message,
+// skipped per the trust rules, or translation failed — raw text shows).
 export const messages = pgTable("messages", {
   id: serial("id").primaryKey(),
   sessionId: integer("session_id")
@@ -40,5 +42,45 @@ export const messages = pgTable("messages", {
   ts: timestamp("ts", { withTimezone: true }).notNull(),
   text: text("text").notNull(),
   subtitle: text("subtitle"),
+  translatedAt: timestamp("translated_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+});
+
+// A jargon term with layered explanations: L1 one-liner (eager, from
+// extraction), L2 basic concept and L3 "why it's used in your session"
+// (lazy, generated on first click, cached).
+export const terms = pgTable("terms", {
+  id: serial("id").primaryKey(),
+  key: text("key").notNull().unique(), // lower-cased canonical name
+  term: text("term").notNull(),
+  domain: text("domain").notNull(),
+  l1: text("l1").notNull(),
+  l2: text("l2"),
+  l3: text("l3"),
+  salience: real("salience"),
+  learnedAt: timestamp("learned_at", { withTimezone: true }),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+});
+
+// An inline highlight in one message: the exact span of jargon plus the
+// plain-language rewrite of the sentence it appears in.
+export const annotations = pgTable("annotations", {
+  id: serial("id").primaryKey(),
+  messageId: integer("message_id")
+    .notNull()
+    .references(() => messages.id),
+  span: text("span").notNull(),
+  sentenceRewrite: text("sentence_rewrite").notNull(),
+  termId: integer("term_id").references(() => terms.id),
+});
+
+// Where a term was seen ("seen in 4 sessions on 2 machines").
+export const termSightings = pgTable("term_sightings", {
+  id: serial("id").primaryKey(),
+  termId: integer("term_id")
+    .notNull()
+    .references(() => terms.id),
+  messageId: integer("message_id")
+    .notNull()
+    .references(() => messages.id),
 });
