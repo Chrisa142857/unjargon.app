@@ -95,8 +95,11 @@ GitHub Pages via the bundled workflow. Full steps and caveats: `DEPLOY.md`.
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/Chrisa142857/unjargon.app/main/install.sh \
-  | sh -s -- --token uj_xxx --server https://unjargon.onrender.com
+  | sh -s -- --server https://unjargon.onrender.com
 ```
+
+The installer prompts for your `INGEST_TOKEN`; find it in the Render service's
+Environment tab. It is kept out of your shell history and the public web page.
 
 No root, no runtime deps. The installer drops a single static binary in
 `~/.local/bin`, registers a Claude Code `SessionStart` hook (so the collector is

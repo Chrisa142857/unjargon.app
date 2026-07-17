@@ -2,10 +2,10 @@
 # unjargon.app collector installer — user-level, no root, no dependencies.
 #
 #   curl -fsSL https://raw.githubusercontent.com/Chrisa142857/unjargon.app/main/install.sh \
-#     | sh -s -- --token uj_xxx --server https://unjargon.onrender.com
+#     | sh -s -- --server https://unjargon.onrender.com
 #
 # Flags:
-#   --token TOK     device token from the web app (required)
+#   --token TOK     device token from the web app (prompts when omitted)
 #   --server URL    unjargon web app (default https://unjargon.app)
 #   --binary PATH   use a locally built unjargond instead of downloading
 #   --no-service    install binary + config only, don't register a service
@@ -26,7 +26,16 @@ while [ $# -gt 0 ]; do
   esac
 done
 
-[ -n "$TOKEN" ] || { echo "error: --token is required (get one from $SERVER/devices)" >&2; exit 2; }
+if [ -z "$TOKEN" ]; then
+  if [ -r /dev/tty ]; then
+    printf "Render INGEST_TOKEN (from your Render service Environment tab): " > /dev/tty
+    IFS= read -r TOKEN < /dev/tty
+  else
+    echo "error: --token is required when no interactive terminal is available" >&2
+    exit 2
+  fi
+fi
+[ -n "$TOKEN" ] || { echo "error: INGEST_TOKEN cannot be empty" >&2; exit 2; }
 
 OS=$(uname -s | tr '[:upper:]' '[:lower:]')
 case "$(uname -m)" in
@@ -50,7 +59,7 @@ if [ -n "$BINARY" ]; then
   # tmp+rename so reinstalling over a *running* unjargond doesn't hit ETXTBSY
   cp "$BINARY" "$BIN.tmp" && mv "$BIN.tmp" "$BIN"
 else
-  URL="${UNJARGOND_BASE_URL:-$SERVER/dl}/unjargond-$OS-$ARCH"
+  URL="${UNJARGOND_BASE_URL:-https://github.com/Chrisa142857/unjargon.app/releases/latest/download}/unjargond-$OS-$ARCH"
   echo "downloading $URL"
   if ! curl -fsSL -o "$BIN.tmp" "$URL"; then
     echo "download failed. Build from source instead:" >&2
