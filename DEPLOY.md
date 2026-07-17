@@ -2,16 +2,43 @@
 
 Two free services, split at the API boundary:
 
-- **Backend** (API + SSE + Postgres + the full UI too): a **Hugging Face Space**
-  (Docker, free CPU tier) built from this repo's `Dockerfile`.
+- **Backend** (API + SSE + Postgres + the full UI too): a Docker container
+  built from this repo's `Dockerfile` — **Render** free tier by default
+  (Hugging Face's Docker SDK is now paid for new Spaces; a paid/grandfathered
+  Space works identically).
 - **Frontend** (static UI): **GitHub Pages**, built by
-  `.github/workflows/pages.yml`, talking to the Space cross-origin (CORS is
+  `.github/workflows/pages.yml`, talking to the backend cross-origin (CORS is
   already configured).
 
-The Space alone is a complete deployment — the Pages frontend is a bonus
-mirror on your own github.io domain. Collectors point at the Space either way.
+The backend alone is a complete deployment — the Pages frontend is a bonus
+mirror on your own github.io domain. Collectors point at the backend either way.
 
-## 1. Backend — Hugging Face Space (no local git needed)
+## 1. Backend — Render (free Docker hosting)
+
+> Hugging Face now marks the Docker SDK as **paid** for new Spaces, so the
+> free path is Render; the HF instructions below still work for paid or
+> grandfathered Spaces.
+
+[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/Chrisa142857/unjargon.app)
+
+1. Click the button (sign in to https://render.com with GitHub — the free
+   tier needs no card) and approve the blueprint; `render.yaml` provisions
+   the `unjargon` web service from this repo's `Dockerfile` on the free plan
+   with a generated `INGEST_TOKEN` (visible in the service's Environment tab
+   — collectors present it).
+2. When the first deploy finishes, copy the service URL
+   (`https://unjargon-<hash>.onrender.com`).
+3. Point the frontend at it: paste the URL into the connect field on the
+   Pages site (instant, per-browser), and/or add it as the repo Actions
+   variable `UNJARGON_API_BASE` so the next Pages build bakes it in.
+
+Render auto-redeploys the service on every push to `main`. Free-tier
+caveats: the service sleeps after ~15 min idle (first request wakes it,
+~1 min cold start) and the bundled Postgres is ephemeral — for durable
+data set a `DATABASE_URL` env var (e.g. https://neon.tech free tier);
+the entrypoint switches automatically.
+
+## 1b. Backend — Hugging Face Space (Docker SDK now paid; no local git needed)
 
 The `Sync backend to Hugging Face Space` workflow pushes `main` to your
 Space and sets its `INGEST_TOKEN` secret automatically. One-time setup,

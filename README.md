@@ -84,6 +84,13 @@ and ships the finished translation. That means:
   agent message, with the annotated original one tap away and layered term cards
   (L1/L2/L3) behind every highlighted term.
 
+## Deploy for free
+
+[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/Chrisa142857/unjargon.app)
+
+Backend: one click on Render's card-free tier (`render.yaml`). Frontend:
+GitHub Pages via the bundled workflow. Full steps and caveats: `DEPLOY.md`.
+
 ## Install a collector (any machine your agents run on)
 
 ```sh

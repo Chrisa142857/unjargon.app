@@ -1,0 +1,27 @@
+# Render Blueprint: the unjargon backend as a free Docker web service.
+# (Hugging Face marked the Docker SDK as paid for new Spaces, so Render's
+# card-free tier is the free backend path; the same image works on both.)
+#
+# One-click: https://render.com/deploy?repo=https://github.com/Chrisa142857/unjargon.app
+#
+# Free-tier behavior: sleeps after ~15 min idle (first request wakes it,
+# ~1 min cold start); container disk is ephemeral, so the bundled Postgres
+# resets on restart — set a DATABASE_URL env var (e.g. Neon free tier) for
+# durable storage; the entrypoint switches automatically.
+services:
+  - type: web
+    name: unjargon
+    runtime: docker
+    plan: free
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /live
+    envVars:
+      - key: PORT
+        value: "7860"
+      - key: INGEST_TOKEN
+        generateValue: true # shown in the Render dashboard; collectors present it
+      # Optional overrides (set in the dashboard when wanted):
+      # ANTHROPIC_API_KEY      — server-side translation fallback (collectors
+      #                          default to local-translate with the user's CLI)
+      # UNJARGON_FAKE_TRANSLATOR=1 — canned offline demo mode
+      # DATABASE_URL           — external Postgres (Neon) for durable data
