@@ -15,6 +15,7 @@ export type LiveTerm = {
   id: number;
   term: string;
   domain: string;
+  kind: string; // "keyword" | "term" | "initial"
   l1: string;
   l2: string | null;
   l3: string | null;
@@ -1012,15 +1013,20 @@ function ChipBoard({
 }) {
   const [activeTermId, setActiveTermId] = useState<number | null>(null);
   const [sort, setSort] = useState<"time" | "domain">("time");
+  const [kindFilter, setKindFilter] = useState<
+    "all" | "keyword" | "term" | "initial"
+  >("all");
 
   const byTime = useMemo(
     () =>
-      [...terms].sort(
-        (a, b) =>
-          b.lastSeenAt.localeCompare(a.lastSeenAt) ||
-          (b.salience ?? 0) - (a.salience ?? 0),
-      ),
-    [terms],
+      [...terms]
+        .filter((t) => kindFilter === "all" || t.kind === kindFilter)
+        .sort(
+          (a, b) =>
+            b.lastSeenAt.localeCompare(a.lastSeenAt) ||
+            (b.salience ?? 0) - (a.salience ?? 0),
+        ),
+    [terms, kindFilter],
   );
 
   const groups = useMemo(() => {
@@ -1151,6 +1157,39 @@ function ChipBoard({
     </button>
   );
 
+  const KIND_LABELS: ["all" | "keyword" | "term" | "initial", string][] = [
+    ["all", "all"],
+    ["keyword", "keywords"],
+    ["term", "terms"],
+    ["initial", "initials"],
+  ];
+
+  const kindBar = (
+    <div className="mb-4 flex flex-wrap items-center gap-1.5">
+      {KIND_LABELS.map(([k, label]) => {
+        const n =
+          k === "all"
+            ? terms.length
+            : terms.filter((t) => t.kind === k).length;
+        return (
+          <button
+            key={k}
+            onClick={() => setKindFilter(k)}
+            disabled={n === 0}
+            className={`rounded-full border px-2.5 py-1 text-xs transition-colors disabled:opacity-40 ${
+              kindFilter === k
+                ? "border-neutral-500 bg-neutral-800 text-neutral-100"
+                : "border-neutral-800 text-neutral-500 hover:border-neutral-600 hover:text-neutral-300"
+            }`}
+          >
+            {label}
+            <span className="ml-1 text-neutral-600">{n}</span>
+          </button>
+        );
+      })}
+    </div>
+  );
+
   const header = (
     <div className="mb-5 flex items-end justify-between gap-3">
       <div>
@@ -1219,6 +1258,12 @@ function ChipBoard({
           </nav>
         )}
         {header}
+        {kindBar}
+        {timeRows.length === 0 && (
+          <p className="py-10 text-center text-sm text-neutral-500">
+            no {kindFilter === "all" ? "terms" : `${kindFilter}s`} yet.
+          </p>
+        )}
         <div className="grid grid-cols-2 gap-3">
           {timeRows.map(({ t, day, divider }, i) => (
             <Fragment key={t.id}>
@@ -1264,6 +1309,7 @@ function ChipBoard({
   return (
     <div>
       {header}
+      {kindBar}
       <div className="flex flex-col gap-8">
         {groups.map(({ domain, list }) => {
           const c = domainColor(domain);

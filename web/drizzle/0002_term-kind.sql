@@ -1,0 +1,1 @@
+ALTER TABLE "terms" ADD COLUMN "kind" text DEFAULT 'term' NOT NULL;

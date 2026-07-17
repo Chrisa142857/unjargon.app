@@ -79,6 +79,9 @@ export const terms = pgTable("terms", {
   key: text("key").notNull().unique(), // lower-cased canonical name
   term: text("term").notNull(),
   domain: text("domain").notNull(),
+  // "keyword" (files/libraries/commands) | "term" (domain term of art) |
+  // "initial" (acronym/initialism) — drives the board's kind filter.
+  kind: text("kind").notNull().default("term"),
   l1: text("l1").notNull(),
   l2: text("l2"),
   l3: text("l3"),

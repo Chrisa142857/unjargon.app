@@ -10,6 +10,7 @@ export async function GET() {
       id: tables.terms.id,
       term: tables.terms.term,
       domain: tables.terms.domain,
+      kind: tables.terms.kind,
       l1: tables.terms.l1,
       l2: tables.terms.l2,
       l3: tables.terms.l3,

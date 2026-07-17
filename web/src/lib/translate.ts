@@ -24,9 +24,33 @@ export type TranslationResult = {
   skip: boolean;
   subtitle?: string;
   annotations?: { span: string; sentence_rewrite: string; term_ref?: string }[];
-  terms?: { term: string; domain: string; level1: string; salience: number }[];
+  terms?: {
+    term: string;
+    domain: string;
+    level1: string;
+    salience: number;
+    kind?: string;
+  }[];
   importance?: number;
 };
+
+export type TermKind = "keyword" | "term" | "initial";
+
+// Fallback classification when the model omits kind (older collectors,
+// degraded output): acronym-shaped → initial, artifact-shaped → keyword.
+export function inferKind(term: string): TermKind {
+  if (
+    /[./\\_]/.test(term) ||
+    /\(\)$/.test(term) ||
+    /\.(txt|py|js|ts|tsx|md|json|ya?ml|toml|sh|go|rs|csv)$/i.test(term)
+  ) {
+    return "keyword";
+  }
+  const compact = term.replace(/[^A-Za-z0-9]/g, "");
+  const capitals = (compact.match(/[A-Z]/g) ?? []).length;
+  if (compact.length <= 6 && capitals >= 2) return "initial"; // RK4, BDF, NaN
+  return "term";
+}
 
 const globalForTranslate = globalThis as unknown as {
   __unjargonTimers?: Map<number, ReturnType<typeof setTimeout>>;
@@ -128,6 +152,11 @@ function sanitize(result: TranslationResult, text: string): TranslationResult {
       ...t,
       domain: t.domain?.trim() || "General",
       salience: Math.min(1, Math.max(0, Number(t.salience) || 0.5)),
+      kind: (["keyword", "term", "initial"] as const).includes(
+        t.kind as TermKind,
+      )
+        ? (t.kind as TermKind)
+        : inferKind(t.term),
     }));
   const importance =
     result.importance === undefined
@@ -218,6 +247,7 @@ async function storeResult(
           key,
           term: t.term.trim(),
           domain: t.domain,
+          kind: t.kind ?? inferKind(t.term),
           l1: t.level1,
           salience: t.salience,
         })
@@ -238,6 +268,7 @@ async function storeResult(
           id: row.id,
           term: row.term,
           domain: row.domain,
+          kind: row.kind,
           l1: row.l1,
           salience: row.salience,
         });
@@ -299,6 +330,7 @@ type TranslationEventTerms = {
   id: number;
   term: string;
   domain: string;
+  kind: string;
   l1: string;
   salience: number | null;
 }[];

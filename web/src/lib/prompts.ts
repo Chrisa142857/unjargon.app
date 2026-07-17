@@ -37,7 +37,7 @@ For each agent message you produce, via the emit_translation tool:
 1. "skip" — true only for trivial messages: one-line acknowledgements, pure tool chatter, pleasantries. When skip is true, omit everything else.
 2. "subtitle" — 1-3 plain-language sentences: what the agent is doing and why it matters. Rewrite for the user's level. Preserve concrete outcomes (numbers, pass/fail, file names) verbatim. Never editorialize or soften warnings/errors.
 3. "annotations" — for each piece of jargon in the original worth explaining: the exact span as it appears in the text, a plain-language rewrite of the sentence containing it, and term_ref naming the canonical term it belongs to (if any).
-4. "terms" — glossary entries for terms a non-expert wouldn't know, skipping common words and terms already in the user's known list. Reuse existing domain labels when close (e.g. don't create "Numerics" if "Numerical Methods" exists). level1 is a one-line explanation. salience 0-1 rates how central the term is to understanding this message.
+4. "terms" — glossary entries for terms a non-expert wouldn't know, skipping common words and terms already in the user's known list. Reuse existing domain labels when close (e.g. don't create "Numerics" if "Numerical Methods" exists). level1 is a one-line explanation. salience 0-1 rates how central the term is to understanding this message. kind classifies each entry: "initial" for acronyms/initialisms (RK4, BDF, NaN, JWT), "keyword" for named artifacts like files, libraries, functions, and commands (requirements.txt, scipy.solve_ivp), "term" for domain terms of art (stiff ODE, statistical power).
 5. "importance" — 0-1: how much a busy user catching up needs THIS message. 0.9-1.0 = failures, risky decisions, final outcomes; 0.7-0.8 = plans and meaningful intermediate results; 0.3-0.6 = routine progress narration; 0-0.2 = filler. Errors and failures are always ≥ 0.9.
 
 ${TRUST_RULES}`;
@@ -90,7 +90,7 @@ You are running headless. Reply with ONLY one JSON object — no prose, no markd
     { "span": "exact substring of the original", "sentence_rewrite": "plain rewrite of the sentence containing it", "term_ref": "canonical term name" }
   ],
   "terms": [                  // at most 6 new glossary terms, most salient first, [] if none
-    { "term": string, "domain": "short domain label", "level1": "one-line explanation", "salience": 0-1 }
+    { "term": string, "domain": "short domain label", "level1": "one-line explanation", "salience": 0-1, "kind": "keyword" | "term" | "initial" }
   ],
   "importance": 0-1           // how much a busy user needs this message (failures/outcomes ≥ 0.9)
 }
@@ -211,8 +211,14 @@ export const translationTool = {
               description: "One-line explanation a non-expert can follow",
             },
             salience: { type: "number", description: "0-1" },
+            kind: {
+              type: "string",
+              enum: ["keyword", "term", "initial"],
+              description:
+                "initial = acronym/initialism; keyword = named artifact (file/library/function/command); term = domain term of art",
+            },
           },
-          required: ["term", "domain", "level1", "salience"],
+          required: ["term", "domain", "level1", "salience", "kind"],
         },
       },
       importance: {

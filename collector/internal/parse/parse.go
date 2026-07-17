@@ -41,6 +41,7 @@ type Term struct {
 	Domain   string  `json:"domain"`
 	Level1   string  `json:"level1"`
 	Salience float64 `json:"salience"`
+	Kind     string  `json:"kind,omitempty"` // "keyword" | "term" | "initial"
 }
 
 // Parser parses one complete transcript line. ok is false for lines that
