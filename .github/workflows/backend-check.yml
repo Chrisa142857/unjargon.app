@@ -1,6 +1,7 @@
 # On-demand health probe of the deployed backend, run from GitHub's runners
-# (the dev sandbox can't reach onrender.com directly). Retries through
-# Render's free-tier cold start (~1 min).
+# (the dev sandbox can't reach onrender.com directly). Verbose on purpose:
+# Render's edge headers distinguish "no live deploy" (x-render-routing:
+# no-server) from a deployed-but-unhealthy service.
 name: Check backend health
 on:
   workflow_dispatch:
@@ -13,15 +14,18 @@ jobs:
           URL: ${{ vars.UNJARGON_API_BASE || 'https://unjargon.onrender.com' }}
         run: |
           echo "checking $URL"
+          echo "--- DNS ---"
+          host "$(echo "$URL" | sed 's|https://||')" || true
+          echo "--- verbose HEAD / (edge headers) ---"
+          curl -sv -o /dev/null --max-time 30 "$URL/" 2>&1 | grep -E "^(<|\*) " | head -30 || true
+          echo "--- GET /live with retries ---"
           code=000
-          for i in $(seq 1 10); do
-            code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 30 "$URL/live" || echo 000)
+          for i in $(seq 1 8); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 30 "$URL/live") || code=000
             echo "attempt $i: GET /live → $code"
             [ "$code" = "200" ] && break
             sleep 15
           done
-          echo "--- /api/bootstrap body (first 300 bytes) ---"
-          curl -s --max-time 30 "$URL/api/bootstrap" | head -c 300; echo
-          echo "--- CORS headers ---"
-          curl -s -D - -o /dev/null --max-time 30 "$URL/api/bootstrap" | grep -i access-control || echo "(none)"
+          echo "--- GET /api/bootstrap ---"
+          curl -s -D - --max-time 30 "$URL/api/bootstrap" | head -c 600; echo
           [ "$code" = "200" ]
