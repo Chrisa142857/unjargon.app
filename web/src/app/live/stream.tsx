@@ -51,6 +51,8 @@ export type LiveDigest = {
 };
 
 const HIGHLIGHT_THRESHOLD = 0.7;
+const INSTALL_COMMAND =
+  "curl -fsSL https://raw.githubusercontent.com/Chrisa142857/unjargon.app/main/install.sh | sh -s -- --server https://unjargon.onrender.com";
 
 // Every domain gets a stable color identity — chips are the product surface,
 // so they carry the visual weight. Class strings are complete literals so
@@ -183,6 +185,21 @@ const CALIBRATION_LABELS: [Calibration, string][] = [
   ["amateur", "technical amateur"],
   ["expert", "expert"],
 ];
+
+function InstallCollectorCallout() {
+  return (
+    <div className="mx-auto mt-20 max-w-2xl rounded-xl border border-amber-200/20 bg-amber-300/[0.06] px-6 py-7 text-center shadow-[0_0_45px_rgba(252,211,77,0.06)]">
+      <p className="text-base font-medium text-amber-100">Connect an AI agent</p>
+      <p className="mt-2 text-sm text-neutral-400">
+        Run this on the macOS or Linux machine where Claude Code or Codex works.
+        The installer securely prompts for your Render <code>INGEST_TOKEN</code>.
+      </p>
+      <code className="mt-5 block overflow-x-auto rounded-lg border border-white/[0.08] bg-neutral-950 px-4 py-3 text-left text-xs text-neutral-200">
+        {INSTALL_COMMAND}
+      </code>
+    </div>
+  );
+}
 
 // /live, chips first. The primary surface is the term board: picked
 // keywords/initials/domain terms grouped by domain, bright until opened —
@@ -487,7 +504,7 @@ export default function LiveStream() {
           <div className="relative z-10 flex-1 overflow-y-auto px-4 py-6">
             <div className="mx-auto max-w-2xl">
               {terms.length === 0 && (
-                <div className="mt-24 text-center text-neutral-500">
+                <div className="text-center text-neutral-500">
                   {!loaded ? (
                     "loading…"
                   ) : loadError ? (
@@ -495,6 +512,8 @@ export default function LiveStream() {
                       <p>couldn&apos;t reach the unjargon API — {loadError}</p>
                       <BackendPrompt />
                     </>
+                  ) : messages.length === 0 && digests.length === 0 ? (
+                    <InstallCollectorCallout />
                   ) : (
                     <>
                       No terms yet — as your agents work, the jargon they use
@@ -527,20 +546,15 @@ export default function LiveStream() {
           >
             <div className="mx-auto flex max-w-2xl flex-col gap-7">
               {messages.length === 0 && digests.length === 0 && (
-                <p className="mt-24 text-center text-neutral-500">
+                <div className="mt-24 text-center text-neutral-500">
                   {!loaded ? (
                     "loading…"
                   ) : loadError ? (
                     <>couldn&apos;t reach the unjargon API — {loadError}</>
                   ) : (
-                    <>
-                      Waiting for agent messages… start a collector:
-                      <code className="mt-2 block text-sm text-neutral-400">
-                        unjargond replay fixtures/session.jsonl
-                      </code>
-                    </>
+                    <InstallCollectorCallout />
                   )}
-                </p>
+                </div>
               )}
               {digests.map((d) => (
                 <DigestCard
