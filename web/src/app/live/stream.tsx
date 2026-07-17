@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "@/lib/api";
 
 export type LiveAnnotation = {
@@ -55,60 +55,78 @@ const HIGHLIGHT_THRESHOLD = 0.7;
 // so they carry the visual weight. Class strings are complete literals so
 // Tailwind's scanner picks them up.
 type DomainColor = {
-  chip: string; // unlearned: bright, glowing
-  active: string; // selected chip
+  accent: string; // colored text (term on tile, header)
+  caption: string; // dimmer colored caption
+  tile: string; // unlearned tile surface
+  tileActive: string; // selected tile
   dot: string;
-  header: string;
+  bar: string; // card accent bar
 };
 
 const DOMAIN_PALETTE: DomainColor[] = [
   {
-    chip: "border-amber-300/40 bg-amber-300/10 text-amber-100 shadow-[0_0_14px_rgba(252,211,77,0.15)] hover:bg-amber-300/20",
-    active: "border-amber-300/80 bg-amber-300/25 text-amber-50 shadow-[0_0_18px_rgba(252,211,77,0.3)]",
+    accent: "text-amber-100",
+    caption: "text-amber-200/70",
+    tile: "border-amber-200/20 bg-gradient-to-br from-amber-300/[0.14] via-amber-300/[0.04] to-transparent hover:border-amber-200/40",
+    tileActive: "border-amber-200/60 bg-gradient-to-br from-amber-300/25 via-amber-300/10 to-transparent shadow-[0_0_30px_rgba(252,211,77,0.15)]",
     dot: "bg-amber-300",
-    header: "text-amber-200/80",
+    bar: "bg-amber-300/70",
   },
   {
-    chip: "border-sky-300/40 bg-sky-300/10 text-sky-100 shadow-[0_0_14px_rgba(125,211,252,0.15)] hover:bg-sky-300/20",
-    active: "border-sky-300/80 bg-sky-300/25 text-sky-50 shadow-[0_0_18px_rgba(125,211,252,0.3)]",
+    accent: "text-sky-100",
+    caption: "text-sky-200/70",
+    tile: "border-sky-200/20 bg-gradient-to-br from-sky-300/[0.14] via-sky-300/[0.04] to-transparent hover:border-sky-200/40",
+    tileActive: "border-sky-200/60 bg-gradient-to-br from-sky-300/25 via-sky-300/10 to-transparent shadow-[0_0_30px_rgba(125,211,252,0.15)]",
     dot: "bg-sky-300",
-    header: "text-sky-200/80",
+    bar: "bg-sky-300/70",
   },
   {
-    chip: "border-emerald-300/40 bg-emerald-300/10 text-emerald-100 shadow-[0_0_14px_rgba(110,231,183,0.15)] hover:bg-emerald-300/20",
-    active: "border-emerald-300/80 bg-emerald-300/25 text-emerald-50 shadow-[0_0_18px_rgba(110,231,183,0.3)]",
+    accent: "text-emerald-100",
+    caption: "text-emerald-200/70",
+    tile: "border-emerald-200/20 bg-gradient-to-br from-emerald-300/[0.14] via-emerald-300/[0.04] to-transparent hover:border-emerald-200/40",
+    tileActive: "border-emerald-200/60 bg-gradient-to-br from-emerald-300/25 via-emerald-300/10 to-transparent shadow-[0_0_30px_rgba(110,231,183,0.15)]",
     dot: "bg-emerald-300",
-    header: "text-emerald-200/80",
+    bar: "bg-emerald-300/70",
   },
   {
-    chip: "border-violet-300/40 bg-violet-300/10 text-violet-100 shadow-[0_0_14px_rgba(196,181,253,0.15)] hover:bg-violet-300/20",
-    active: "border-violet-300/80 bg-violet-300/25 text-violet-50 shadow-[0_0_18px_rgba(196,181,253,0.3)]",
+    accent: "text-violet-100",
+    caption: "text-violet-200/70",
+    tile: "border-violet-200/20 bg-gradient-to-br from-violet-300/[0.14] via-violet-300/[0.04] to-transparent hover:border-violet-200/40",
+    tileActive: "border-violet-200/60 bg-gradient-to-br from-violet-300/25 via-violet-300/10 to-transparent shadow-[0_0_30px_rgba(196,181,253,0.15)]",
     dot: "bg-violet-300",
-    header: "text-violet-200/80",
+    bar: "bg-violet-300/70",
   },
   {
-    chip: "border-rose-300/40 bg-rose-300/10 text-rose-100 shadow-[0_0_14px_rgba(253,164,175,0.15)] hover:bg-rose-300/20",
-    active: "border-rose-300/80 bg-rose-300/25 text-rose-50 shadow-[0_0_18px_rgba(253,164,175,0.3)]",
+    accent: "text-rose-100",
+    caption: "text-rose-200/70",
+    tile: "border-rose-200/20 bg-gradient-to-br from-rose-300/[0.14] via-rose-300/[0.04] to-transparent hover:border-rose-200/40",
+    tileActive: "border-rose-200/60 bg-gradient-to-br from-rose-300/25 via-rose-300/10 to-transparent shadow-[0_0_30px_rgba(253,164,175,0.15)]",
     dot: "bg-rose-300",
-    header: "text-rose-200/80",
+    bar: "bg-rose-300/70",
   },
   {
-    chip: "border-cyan-300/40 bg-cyan-300/10 text-cyan-100 shadow-[0_0_14px_rgba(103,232,249,0.15)] hover:bg-cyan-300/20",
-    active: "border-cyan-300/80 bg-cyan-300/25 text-cyan-50 shadow-[0_0_18px_rgba(103,232,249,0.3)]",
+    accent: "text-cyan-100",
+    caption: "text-cyan-200/70",
+    tile: "border-cyan-200/20 bg-gradient-to-br from-cyan-300/[0.14] via-cyan-300/[0.04] to-transparent hover:border-cyan-200/40",
+    tileActive: "border-cyan-200/60 bg-gradient-to-br from-cyan-300/25 via-cyan-300/10 to-transparent shadow-[0_0_30px_rgba(103,232,249,0.15)]",
     dot: "bg-cyan-300",
-    header: "text-cyan-200/80",
+    bar: "bg-cyan-300/70",
   },
   {
-    chip: "border-lime-300/40 bg-lime-300/10 text-lime-100 shadow-[0_0_14px_rgba(190,242,100,0.15)] hover:bg-lime-300/20",
-    active: "border-lime-300/80 bg-lime-300/25 text-lime-50 shadow-[0_0_18px_rgba(190,242,100,0.3)]",
+    accent: "text-lime-100",
+    caption: "text-lime-200/70",
+    tile: "border-lime-200/20 bg-gradient-to-br from-lime-300/[0.14] via-lime-300/[0.04] to-transparent hover:border-lime-200/40",
+    tileActive: "border-lime-200/60 bg-gradient-to-br from-lime-300/25 via-lime-300/10 to-transparent shadow-[0_0_30px_rgba(190,242,100,0.15)]",
     dot: "bg-lime-300",
-    header: "text-lime-200/80",
+    bar: "bg-lime-300/70",
   },
   {
-    chip: "border-orange-300/40 bg-orange-300/10 text-orange-100 shadow-[0_0_14px_rgba(253,186,116,0.15)] hover:bg-orange-300/20",
-    active: "border-orange-300/80 bg-orange-300/25 text-orange-50 shadow-[0_0_18px_rgba(253,186,116,0.3)]",
+    accent: "text-orange-100",
+    caption: "text-orange-200/70",
+    tile: "border-orange-200/20 bg-gradient-to-br from-orange-300/[0.14] via-orange-300/[0.04] to-transparent hover:border-orange-200/40",
+    tileActive: "border-orange-200/60 bg-gradient-to-br from-orange-300/25 via-orange-300/10 to-transparent shadow-[0_0_30px_rgba(253,186,116,0.15)]",
     dot: "bg-orange-300",
-    header: "text-orange-200/80",
+    bar: "bg-orange-300/70",
   },
 ];
 
@@ -353,12 +371,22 @@ export default function LiveStream() {
   const latest = messages[messages.length - 1];
 
   return (
-    <main className="flex h-dvh flex-col bg-neutral-950 text-neutral-100">
-      <header className="flex items-center gap-2 border-b border-neutral-800 px-4 py-3 text-sm">
-        <span
-          className={`inline-block h-2.5 w-2.5 rounded-full ${connected ? "bg-emerald-400" : "bg-neutral-600"}`}
-          title={connected ? "live" : "disconnected"}
-        />
+    <main className="relative flex h-dvh flex-col bg-neutral-950 text-neutral-100">
+      {/* ambient glow — depth without noise */}
+      <div
+        aria-hidden
+        className="pointer-events-none fixed inset-0 bg-[radial-gradient(55%_45%_at_12%_-5%,rgba(252,211,77,0.06),transparent),radial-gradient(45%_40%_at_105%_105%,rgba(125,211,252,0.05),transparent)]"
+      />
+      <header className="relative z-10 flex items-center gap-2 border-b border-white/[0.06] bg-neutral-950/80 px-4 py-3 text-sm backdrop-blur">
+        <span className="relative flex h-2.5 w-2.5">
+          {connected && (
+            <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400/60" />
+          )}
+          <span
+            className={`relative inline-flex h-2.5 w-2.5 rounded-full ${connected ? "bg-emerald-400" : "bg-neutral-600"}`}
+            title={connected ? "live" : "disconnected"}
+          />
+        </span>
         <span className="font-semibold tracking-tight">unjargon</span>
         {latest && (
           <span className="truncate text-neutral-400">
@@ -430,7 +458,7 @@ export default function LiveStream() {
 
       {view === "board" ? (
         <>
-          <div className="flex-1 overflow-y-auto px-4 py-6">
+          <div className="relative z-10 flex-1 overflow-y-auto px-4 py-6">
             <div className="mx-auto max-w-2xl">
               {terms.length === 0 && (
                 <p className="mt-24 text-center text-neutral-500">
@@ -457,14 +485,16 @@ export default function LiveStream() {
               />
             </div>
           </div>
-          <LatestStrip message={latest} onOpenStream={() => setView("stream")} />
+          <div className="relative z-10">
+            <LatestStrip message={latest} onOpenStream={() => setView("stream")} />
+          </div>
         </>
       ) : (
         <>
           <div
             ref={scrollerRef}
             onScroll={onScroll}
-            className="flex-1 overflow-y-auto px-4 py-6"
+            className="relative z-10 flex-1 overflow-y-auto px-4 py-6"
           >
             <div className="mx-auto flex max-w-2xl flex-col gap-7">
               {messages.length === 0 && digests.length === 0 && (
@@ -664,10 +694,10 @@ function MessageRow({
               }
               className={`rounded-full border px-2.5 py-0.5 text-xs transition-colors ${
                 activeTermId === t.id
-                  ? domainColor(t.domain).active
+                  ? `${domainColor(t.domain).tileActive} ${domainColor(t.domain).accent}`
                   : t.learnedAt
                     ? "border-neutral-700 text-neutral-400 hover:border-neutral-500 hover:text-neutral-200"
-                    : domainColor(t.domain).chip
+                    : `${domainColor(t.domain).tile} ${domainColor(t.domain).accent}`
               }`}
             >
               {t.term}
@@ -793,24 +823,27 @@ function InlineTermCard({
     }
   }
 
+  const c = domainColor(term.domain);
   return (
-    <div className="mt-2 rounded-lg border border-neutral-800 bg-neutral-900/70">
-      {/* collapsed: the keyword + the short explanation */}
-      <button onClick={toggleLong} className="w-full px-3 py-2.5 text-left">
-        <p className="text-sm leading-relaxed">
-          <span className="font-semibold">{term.term}</span>
-          <span className="ml-2 text-xs text-neutral-500">{term.domain}</span>
-        </p>
-        <p className="mt-0.5 text-sm leading-relaxed text-neutral-300">
-          {term.l1}
-        </p>
-        {!open && (
-          <p className="mt-1 text-xs text-neutral-500">in this context ▸</p>
-        )}
-      </button>
-      {/* opened: the long, in-context explanation */}
-      {open && (
-        <div className="border-t border-neutral-800 px-3 py-2.5 text-sm leading-relaxed">
+    <div className="mt-2 flex overflow-hidden rounded-xl border border-white/10 bg-neutral-900/80 backdrop-blur">
+      <div className={`w-1 shrink-0 ${c.bar}`} />
+      <div className="min-w-0 flex-1">
+        {/* collapsed: the keyword + the short explanation */}
+        <button onClick={toggleLong} className="w-full px-3.5 py-3 text-left">
+          <p className="text-sm leading-relaxed">
+            <span className={`font-semibold ${c.accent}`}>{term.term}</span>
+            <span className={`ml-2 text-xs ${c.caption}`}>{term.domain}</span>
+          </p>
+          <p className="mt-0.5 text-sm leading-relaxed text-neutral-300">
+            {term.l1}
+          </p>
+          {!open && (
+            <p className="mt-1 text-xs text-neutral-500">in this context ▸</p>
+          )}
+        </button>
+        {/* opened: the long, in-context explanation */}
+        {open && (
+          <div className="border-t border-white/[0.06] px-3.5 py-3 text-sm leading-relaxed">
           {error ? (
             <p className="text-red-400/90">couldn&apos;t load — {error}</p>
           ) : !hasLong ? (
@@ -824,14 +857,15 @@ function InlineTermCard({
               <p className="mt-2 text-neutral-400">{term.l2}</p>
             </>
           )}
-          <button
-            onClick={onClose}
-            className="mt-2 text-xs text-neutral-500 hover:text-neutral-300"
-          >
-            close ✕
-          </button>
-        </div>
-      )}
+            <button
+              onClick={onClose}
+              className="mt-2 text-xs text-neutral-500 hover:text-neutral-300"
+            >
+              close ✕
+            </button>
+          </div>
+        )}
+      </div>
     </div>
   );
 }
@@ -936,10 +970,10 @@ function AnnotatedOriginal({
   );
 }
 
-// The primary surface: every picked keyword/initial/domain term, grouped by
-// domain, freshest domains first. Bright = not yet opened; dimmed = learned.
-// Tap a chip → collapsed card (term + one-liner); open → long in-context
-// explanation grounded in the term's latest sighting.
+// The primary surface: the term wall. Newest unlearned terms lead as hero
+// tiles carrying their one-line explanation; the rest are compact tiles;
+// learned terms recede to small pills at the end. Tap anything → collapsed
+// card → long in-context explanation.
 function ChipBoard({
   terms,
   freshTermIds,
@@ -966,60 +1000,107 @@ function ChipBoard({
 
   const groups = useMemo(() => {
     const byDomain = new Map<string, LiveTerm[]>();
-    for (const t of terms) {
+    for (const t of byTime) {
       byDomain.set(t.domain, [...(byDomain.get(t.domain) ?? []), t]);
     }
-    const out = [...byDomain.entries()].map(([domain, list]) => {
-      list.sort(
-        (a, b) =>
-          b.lastSeenAt.localeCompare(a.lastSeenAt) ||
-          (b.salience ?? 0) - (a.salience ?? 0),
-      );
-      return { domain, list, newest: list[0].lastSeenAt };
-    });
+    const out = [...byDomain.entries()].map(([domain, list]) => ({
+      domain,
+      list,
+      newest: list[0].lastSeenAt,
+    }));
     out.sort((a, b) => b.newest.localeCompare(a.newest));
     return out;
-  }, [terms]);
+  }, [byTime]);
 
   const active =
     activeTermId !== null
       ? (terms.find((t) => t.id === activeTermId) ?? null)
       : null;
+  const learnedCount = terms.filter((t) => t.learnedAt).length;
 
-  // Unlearned chips are big, colored by domain, and glow; learned chips
-  // recede. Fresh ones pop in and carry a pulsing dot.
-  const chip = (t: LiveTerm) => {
+  const card = (t: LiveTerm) => (
+    <div className="col-span-2">
+      <InlineTermCard
+        key={t.id}
+        term={t}
+        onClose={() => setActiveTermId(null)}
+        onExpanded={onExpanded}
+        onLearned={onLearned}
+      />
+    </div>
+  );
+
+  const tile = (t: LiveTerm, hero: boolean) => {
     const c = domainColor(t.domain);
     const isActive = activeTermId === t.id;
     const fresh = freshTermIds.has(t.id) && !t.learnedAt;
     return (
       <button
         key={t.id}
-        title={`${t.domain} · last seen ${timeOf(t.lastSeenAt)}`}
         onClick={() => setActiveTermId((cur) => (cur === t.id ? null : t.id))}
-        className={`rounded-full border font-medium transition-all duration-150 hover:scale-105 active:scale-95 ${
-          fresh ? "animate-[chip-in_0.3s_ease-out]" : ""
-        } ${
-          isActive
-            ? `px-5 py-2.5 text-base ${c.active}`
-            : t.learnedAt
-              ? "border-neutral-800 bg-neutral-900/40 px-3.5 py-1.5 text-sm text-neutral-500 hover:border-neutral-600 hover:text-neutral-300"
-              : `px-5 py-2.5 text-base ${c.chip}`
+        className={`rounded-2xl border p-4 text-left transition-all duration-150 hover:-translate-y-0.5 active:translate-y-0 ${
+          hero ? "col-span-2" : "col-span-1"
+        } ${fresh ? "animate-[chip-in_0.35s_ease-out]" : ""} ${
+          isActive ? c.tileActive : c.tile
         }`}
       >
-        {t.term}
-        {fresh && (
-          <span
-            className={`ml-2 inline-block h-2 w-2 animate-pulse rounded-full align-middle ${c.dot}`}
-          />
+        <p
+          className={`flex items-center gap-1.5 text-[10px] font-medium uppercase tracking-[0.14em] ${c.caption}`}
+        >
+          <span className={`inline-block h-1.5 w-1.5 rounded-full ${c.dot}`} />
+          {t.domain}
+          {fresh && (
+            <span className={`ml-auto inline-block h-2 w-2 animate-pulse rounded-full ${c.dot}`} />
+          )}
+        </p>
+        <p
+          className={`mt-1.5 font-semibold tracking-tight ${c.accent} ${hero ? "text-2xl" : "text-lg"}`}
+        >
+          {t.term}
+        </p>
+        {hero && (
+          <p className="mt-1.5 line-clamp-2 text-sm leading-relaxed text-neutral-400">
+            {t.l1}
+          </p>
         )}
       </button>
     );
   };
 
-  const sortToggle = terms.length > 0 && (
-    <div className="mb-4 flex justify-end">
-      <span className="flex overflow-hidden rounded-md border border-neutral-800 text-xs">
+  const learnedPill = (t: LiveTerm) => (
+    <button
+      key={t.id}
+      title={`${t.domain} · learned`}
+      onClick={() => setActiveTermId((cur) => (cur === t.id ? null : t.id))}
+      className={`rounded-full border px-3 py-1 text-sm transition-colors ${
+        activeTermId === t.id
+          ? "border-neutral-500 bg-neutral-800 text-neutral-200"
+          : "border-neutral-800 text-neutral-500 hover:border-neutral-600 hover:text-neutral-300"
+      }`}
+    >
+      {t.term}
+    </button>
+  );
+
+  const header = (
+    <div className="mb-5 flex items-end justify-between gap-3">
+      <div>
+        <p className="text-sm text-neutral-400">
+          <span className="font-semibold text-neutral-100">
+            {terms.length - learnedCount}
+          </span>{" "}
+          to learn · {learnedCount} learned
+        </p>
+        <div className="mt-1.5 h-1 w-36 overflow-hidden rounded-full bg-neutral-800">
+          <div
+            className="h-full rounded-full bg-gradient-to-r from-amber-300/80 to-emerald-300/80 transition-all duration-500"
+            style={{
+              width: `${terms.length ? Math.round((learnedCount / terms.length) * 100) : 0}%`,
+            }}
+          />
+        </div>
+      </div>
+      <span className="flex shrink-0 overflow-hidden rounded-md border border-neutral-800 text-xs">
         {(["time", "domain"] as const).map((s) => (
           <button
             key={s}
@@ -1033,49 +1114,29 @@ function ChipBoard({
     </div>
   );
 
+  if (terms.length === 0) return null;
+
   if (sort === "time") {
-    // Default: one flat timeline of chips, newest sighting first.
+    const unlearned = byTime.filter((t) => !t.learnedAt);
+    const learned = byTime.filter((t) => t.learnedAt);
     return (
       <div>
-        {sortToggle}
-        <div className="flex flex-wrap items-center gap-2.5">{byTime.map(chip)}</div>
-        {active && (
-          <InlineTermCard
-            key={active.id}
-            term={active}
-            onClose={() => setActiveTermId(null)}
-            onExpanded={onExpanded}
-            onLearned={onLearned}
-          />
-        )}
-      </div>
-    );
-  }
-
-  return (
-    <div className="flex flex-col gap-6">
-      {sortToggle}
-      {groups.map(({ domain, list }) => {
-        const fresh = list.filter(
-          (t) => freshTermIds.has(t.id) && !t.learnedAt,
-        ).length;
-        return (
-          <section key={domain}>
-            <h2
-              className={`mb-2.5 flex items-center gap-2 text-xs font-semibold uppercase tracking-widest ${domainColor(domain).header}`}
-            >
-              <span
-                className={`inline-block h-2 w-2 rounded-full ${domainColor(domain).dot}`}
-              />
-              {domain}
-              {fresh > 0 && (
-                <span className="rounded-full bg-neutral-800 px-1.5 py-0.5 font-normal normal-case tracking-normal text-neutral-300">
-                  {fresh} new
-                </span>
-              )}
-            </h2>
-            <div className="flex flex-wrap items-center gap-2.5">{list.map(chip)}</div>
-            {active && active.domain === domain && (
+        {header}
+        <div className="grid grid-cols-2 gap-3">
+          {unlearned.map((t, i) => (
+            <Fragment key={t.id}>
+              {tile(t, i < 2)}
+              {active?.id === t.id && card(t)}
+            </Fragment>
+          ))}
+        </div>
+        {learned.length > 0 && (
+          <div className="mt-8">
+            <h3 className="mb-2.5 text-[10px] font-medium uppercase tracking-[0.14em] text-neutral-600">
+              learned
+            </h3>
+            <div className="flex flex-wrap gap-2">{learned.map(learnedPill)}</div>
+            {active?.learnedAt && (
               <InlineTermCard
                 key={active.id}
                 term={active}
@@ -1084,9 +1145,54 @@ function ChipBoard({
                 onLearned={onLearned}
               />
             )}
-          </section>
-        );
-      })}
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  return (
+    <div>
+      {header}
+      <div className="flex flex-col gap-8">
+        {groups.map(({ domain, list }) => {
+          const c = domainColor(domain);
+          return (
+            <section key={domain}>
+              <h2
+                className={`mb-2.5 flex items-center gap-2 text-[10px] font-medium uppercase tracking-[0.14em] ${c.caption}`}
+              >
+                <span className={`inline-block h-1.5 w-1.5 rounded-full ${c.dot}`} />
+                {domain}
+              </h2>
+              <div className="grid grid-cols-2 gap-3">
+                {list
+                  .filter((t) => !t.learnedAt)
+                  .map((t) => (
+                    <Fragment key={t.id}>
+                      {tile(t, false)}
+                      {active?.id === t.id && card(t)}
+                    </Fragment>
+                  ))}
+              </div>
+              {list.some((t) => t.learnedAt) && (
+                <div className="mt-3 flex flex-wrap gap-2">
+                  {list.filter((t) => t.learnedAt).map(learnedPill)}
+                </div>
+              )}
+              {active?.learnedAt && active.domain === domain && (
+                <InlineTermCard
+                  key={active.id}
+                  term={active}
+                  onClose={() => setActiveTermId(null)}
+                  onExpanded={onExpanded}
+                  onLearned={onLearned}
+                />
+              )}
+            </section>
+          );
+        })}
+      </div>
     </div>
   );
 }
