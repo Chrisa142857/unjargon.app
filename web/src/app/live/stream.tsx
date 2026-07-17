@@ -145,6 +145,23 @@ function timeOf(ts: string) {
   });
 }
 
+// "today" / "yesterday" / "Tue, Jul 15" — day buckets for the time-sorted wall.
+function dayLabelOf(ts: string): string {
+  const d = new Date(ts);
+  const now = new Date();
+  const startOf = (x: Date) =>
+    new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
+  const diffDays = Math.round((startOf(now) - startOf(d)) / 86_400_000);
+  if (diffDays <= 0) return "today";
+  if (diffDays === 1) return "yesterday";
+  return d.toLocaleDateString([], {
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+    ...(d.getFullYear() !== now.getFullYear() ? { year: "numeric" } : {}),
+  });
+}
+
 function projectOf(cwd: string | null) {
   if (!cwd) return null;
   return cwd.split("/").filter(Boolean).pop() ?? null;
@@ -1018,6 +1035,17 @@ function ChipBoard({
       : null;
   const learnedCount = terms.filter((t) => t.learnedAt).length;
 
+  // Time-sorted rows with day-divider flags, precomputed so render stays pure.
+  const timeRows = useMemo(() => {
+    const unlearned = byTime.filter((t) => !t.learnedAt);
+    return unlearned.map((t, i) => {
+      const day = dayLabelOf(t.lastSeenAt);
+      const divider =
+        i === 0 || day !== dayLabelOf(unlearned[i - 1].lastSeenAt);
+      return { t, day, divider };
+    });
+  }, [byTime]);
+
   const card = (t: LiveTerm) => (
     <div className="col-span-2">
       <InlineTermCard
@@ -1048,9 +1076,12 @@ function ChipBoard({
           className={`flex items-center gap-1.5 text-[10px] font-medium uppercase tracking-[0.14em] ${c.caption}`}
         >
           <span className={`inline-block h-1.5 w-1.5 rounded-full ${c.dot}`} />
-          {t.domain}
+          <span className="truncate">{t.domain}</span>
+          <span className="ml-auto shrink-0 font-mono normal-case tracking-normal text-neutral-500">
+            {timeOf(t.lastSeenAt)}
+          </span>
           {fresh && (
-            <span className={`ml-auto inline-block h-2 w-2 animate-pulse rounded-full ${c.dot}`} />
+            <span className={`inline-block h-2 w-2 shrink-0 animate-pulse rounded-full ${c.dot}`} />
           )}
         </p>
         <p
@@ -1117,14 +1148,19 @@ function ChipBoard({
   if (terms.length === 0) return null;
 
   if (sort === "time") {
-    const unlearned = byTime.filter((t) => !t.learnedAt);
     const learned = byTime.filter((t) => t.learnedAt);
     return (
       <div>
         {header}
         <div className="grid grid-cols-2 gap-3">
-          {unlearned.map((t, i) => (
+          {timeRows.map(({ t, day, divider }, i) => (
             <Fragment key={t.id}>
+              {divider && (
+                <div className="col-span-2 mt-1 flex items-center gap-3 text-[10px] font-medium uppercase tracking-[0.14em] text-neutral-500 first:mt-0">
+                  {day}
+                  <span className="h-px flex-1 bg-white/5" />
+                </div>
+              )}
               {tile(t, i < 2)}
               {active?.id === t.id && card(t)}
             </Fragment>
