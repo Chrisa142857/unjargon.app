@@ -83,9 +83,6 @@ export default function LiveStream() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [connected, setConnected] = useState(false);
   const [pinned, setPinned] = useState(true);
-  const [card, setCard] = useState<{ termId: number; messageId: number } | null>(
-    null,
-  );
   const [showOriginals, setShowOriginals] = useState(false);
   const [calibration, setCalibration] = useState<Calibration>("new");
 
@@ -148,6 +145,13 @@ export default function LiveStream() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ calibration: level }),
     }).catch(() => {});
+  }
+
+  // Cache lazily fetched L2/L3 so a term opens instantly the next time.
+  function cacheExpansion(termId: number, l2: string, l3: string) {
+    setTerms((prev) =>
+      prev.map((t) => (t.id === termId ? { ...t, l2, l3 } : t)),
+    );
   }
   const bottomRef = useRef<HTMLDivElement>(null);
   const scrollerRef = useRef<HTMLDivElement>(null);
@@ -320,7 +324,7 @@ export default function LiveStream() {
               digest={d}
               termsById={termsById}
               showOriginal={showOriginals}
-              onOpenTerm={(termId, messageId) => setCard({ termId, messageId })}
+              onTermExpanded={cacheExpansion}
             />
           ))}
           {messages
@@ -337,7 +341,7 @@ export default function LiveStream() {
                 message={m}
                 termsById={termsById}
                 showOriginal={showOriginals}
-                onOpenTerm={(termId, messageId) => setCard({ termId, messageId })}
+                onTermExpanded={cacheExpansion}
               />
             ))}
           <div ref={bottomRef} />
@@ -360,122 +364,7 @@ export default function LiveStream() {
         </footer>
       )}
 
-      {card && (
-        <TermCard
-          term={termsById.get(card.termId) ?? null}
-          messageId={card.messageId}
-          onClose={() => setCard(null)}
-          onExpanded={(termId, l2, l3) =>
-            setTerms((prev) =>
-              prev.map((t) => (t.id === termId ? { ...t, l2, l3 } : t)),
-            )
-          }
-        />
-      )}
     </main>
-  );
-}
-
-// L1/L2/L3 term card as a bottom sheet. L1 is already known (eager, from
-// extraction); L2/L3 are fetched on first open and cached server-side.
-function TermCard({
-  term,
-  messageId,
-  onClose,
-  onExpanded,
-}: {
-  term: LiveTerm | null;
-  messageId: number;
-  onClose: () => void;
-  onExpanded: (termId: number, l2: string, l3: string) => void;
-}) {
-  const [error, setError] = useState<string | null>(null);
-  const needsFetch = !!term && (!term.l2 || !term.l3);
-
-  useEffect(() => {
-    if (!term || !needsFetch) return;
-    let cancelled = false;
-    (async () => {
-      try {
-        const res = await fetch(api(`/api/terms/${term.id}/expand`), {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ messageId }),
-        });
-        if (!res.ok) throw new Error(`expand failed (${res.status})`);
-        const data = await res.json();
-        if (!cancelled) onExpanded(term.id, data.l2, data.l3);
-      } catch (err) {
-        if (!cancelled) setError(String(err));
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [term?.id]);
-
-  if (!term) return null;
-
-  return (
-    <div
-      className="fixed inset-0 z-10 flex items-end justify-center bg-black/60"
-      onClick={onClose}
-    >
-      <div
-        className="max-h-[80dvh] w-full max-w-2xl overflow-y-auto rounded-t-2xl border border-neutral-700 bg-neutral-900 p-5 pb-8"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="mb-3 flex items-start justify-between gap-3">
-          <div>
-            <h2 className="text-xl font-semibold">{term.term}</h2>
-            <span className="mt-1 inline-block rounded-full border border-neutral-700 px-2 py-0.5 text-xs text-neutral-400">
-              {term.domain}
-            </span>
-          </div>
-          <button
-            onClick={onClose}
-            className="rounded-full p-1.5 text-neutral-400 hover:bg-neutral-800 hover:text-neutral-100"
-            aria-label="close"
-          >
-            ✕
-          </button>
-        </div>
-
-        <p className="text-base leading-relaxed">{term.l1}</p>
-
-        <CardSection title="What it is" body={term.l2} error={error} />
-        <CardSection title="In your session" body={term.l3} error={error} />
-      </div>
-    </div>
-  );
-}
-
-function CardSection({
-  title,
-  body,
-  error,
-}: {
-  title: string;
-  body: string | null;
-  error: string | null;
-}) {
-  return (
-    <section className="mt-4">
-      <h3 className="mb-1 text-[10px] uppercase tracking-widest text-neutral-500">
-        {title}
-      </h3>
-      {body ? (
-        <p className="text-sm leading-relaxed text-neutral-200">{body}</p>
-      ) : error ? (
-        <p className="text-sm text-red-400/90">couldn&apos;t load — {error}</p>
-      ) : (
-        <div className="animate-pulse space-y-2" aria-label="loading">
-          <div className="h-3 w-full rounded bg-neutral-800" />
-          <div className="h-3 w-5/6 rounded bg-neutral-800" />
-        </div>
-      )}
-    </section>
   );
 }
 
@@ -499,12 +388,12 @@ function DigestCard({
   digest: d,
   termsById,
   showOriginal,
-  onOpenTerm,
+  onTermExpanded,
 }: {
   digest: LiveDigest;
   termsById: Map<number, LiveTerm>;
   showOriginal: boolean;
-  onOpenTerm: (termId: number, messageId: number) => void;
+  onTermExpanded: (termId: number, l2: string, l3: string) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
   const [inner, setInner] = useState<LiveMessage[] | null>(null);
@@ -547,7 +436,7 @@ function DigestCard({
               message={m}
               termsById={termsById}
               showOriginal={showOriginal}
-              onOpenTerm={onOpenTerm}
+              onTermExpanded={onTermExpanded}
             />
           ))}
         </div>
@@ -556,19 +445,71 @@ function DigestCard({
   );
 }
 
+const MAX_CHIPS = 4;
+
 function MessageRow({
   message: m,
   termsById,
   showOriginal,
-  onOpenTerm,
+  onTermExpanded,
 }: {
   message: LiveMessage;
   termsById: Map<number, LiveTerm>;
   showOriginal: boolean;
-  onOpenTerm: (termId: number, messageId: number) => void;
+  onTermExpanded: (termId: number, l2: string, l3: string) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
+  const [activeTermId, setActiveTermId] = useState<number | null>(null);
   const hasSubtitle = m.subtitle !== null;
+
+  // The picked terms for this message: keywords/initials/domain terms the
+  // extraction flagged, most salient first.
+  const picked = useMemo(() => {
+    const ids = [...new Set(m.annotations.map((a) => a.termId))].filter(
+      (id): id is number => id !== null,
+    );
+    return ids
+      .map((id) => termsById.get(id))
+      .filter((t): t is LiveTerm => !!t)
+      .sort((a, b) => (b.salience ?? 0) - (a.salience ?? 0))
+      .slice(0, MAX_CHIPS);
+  }, [m.annotations, termsById]);
+
+  const activeTerm =
+    activeTermId !== null ? (termsById.get(activeTermId) ?? null) : null;
+
+  const termLayer = (
+    <>
+      {picked.length > 0 && (
+        <div className="mt-2 flex flex-wrap gap-1.5">
+          {picked.map((t) => (
+            <button
+              key={t.id}
+              onClick={() =>
+                setActiveTermId((cur) => (cur === t.id ? null : t.id))
+              }
+              className={`rounded-full border px-2.5 py-0.5 text-xs transition-colors ${
+                activeTermId === t.id
+                  ? "border-amber-300/50 bg-amber-300/15 text-amber-100"
+                  : "border-neutral-700 text-neutral-400 hover:border-neutral-500 hover:text-neutral-200"
+              }`}
+            >
+              {t.term}
+            </button>
+          ))}
+        </div>
+      )}
+      {activeTerm && (
+        <InlineTermCard
+          key={activeTerm.id}
+          term={activeTerm}
+          messageId={m.id}
+          onClose={() => setActiveTermId(null)}
+          onExpanded={onTermExpanded}
+        />
+      )}
+    </>
+  );
 
   return (
     <article className="flex gap-4">
@@ -591,13 +532,16 @@ function MessageRow({
           </p>
         ) : showOriginal ? (
           // Global ⌘J mode: the verbatim original, highlights still tappable.
-          <AnnotatedOriginal
-            text={m.text}
-            annotations={m.annotations}
-            termsById={termsById}
-            onOpenTerm={(termId) => onOpenTerm(termId, m.id)}
-            bare
-          />
+          <div>
+            <AnnotatedOriginal
+              text={m.text}
+              annotations={m.annotations}
+              termsById={termsById}
+              onOpenTerm={setActiveTermId}
+              bare
+            />
+            {termLayer}
+          </div>
         ) : (
           <div>
             <p className="whitespace-pre-wrap text-lg leading-relaxed">
@@ -615,13 +559,100 @@ function MessageRow({
                 text={m.text}
                 annotations={m.annotations}
                 termsById={termsById}
-                onOpenTerm={(termId) => onOpenTerm(termId, m.id)}
+                onOpenTerm={setActiveTermId}
               />
             )}
+            {termLayer}
           </div>
         )}
       </div>
     </article>
+  );
+}
+
+// The term card, two stages. Collapsed: just the picked term and its
+// one-line explanation. Opened: the long in-context explanation (grounded in
+// this message), with the general background beneath — lazily generated and
+// cached the first time anyone opens it.
+function InlineTermCard({
+  term,
+  messageId,
+  onClose,
+  onExpanded,
+}: {
+  term: LiveTerm;
+  messageId: number;
+  onClose: () => void;
+  onExpanded: (termId: number, l2: string, l3: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const hasLong = !!term.l2 && !!term.l3;
+
+  async function toggleLong() {
+    const next = !open;
+    setOpen(next);
+    setError(null);
+    if (next && !hasLong && !loading) {
+      setLoading(true);
+      try {
+        const res = await fetch(api(`/api/terms/${term.id}/expand`), {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ messageId }),
+        });
+        if (!res.ok) throw new Error(`expand failed (${res.status})`);
+        const data = await res.json();
+        onExpanded(term.id, data.l2, data.l3);
+      } catch (err) {
+        setError(String(err));
+      } finally {
+        setLoading(false);
+      }
+    }
+  }
+
+  return (
+    <div className="mt-2 rounded-lg border border-neutral-800 bg-neutral-900/70">
+      {/* collapsed: the keyword + the short explanation */}
+      <button onClick={toggleLong} className="w-full px-3 py-2.5 text-left">
+        <p className="text-sm leading-relaxed">
+          <span className="font-semibold">{term.term}</span>
+          <span className="ml-2 text-xs text-neutral-500">{term.domain}</span>
+        </p>
+        <p className="mt-0.5 text-sm leading-relaxed text-neutral-300">
+          {term.l1}
+        </p>
+        {!open && (
+          <p className="mt-1 text-xs text-neutral-500">in this context ▸</p>
+        )}
+      </button>
+      {/* opened: the long, in-context explanation */}
+      {open && (
+        <div className="border-t border-neutral-800 px-3 py-2.5 text-sm leading-relaxed">
+          {error ? (
+            <p className="text-red-400/90">couldn&apos;t load — {error}</p>
+          ) : !hasLong ? (
+            <div className="animate-pulse space-y-2" aria-label="loading">
+              <div className="h-3 w-full rounded bg-neutral-800" />
+              <div className="h-3 w-5/6 rounded bg-neutral-800" />
+            </div>
+          ) : (
+            <>
+              <p className="text-neutral-100">{term.l3}</p>
+              <p className="mt-2 text-neutral-400">{term.l2}</p>
+            </>
+          )}
+          <button
+            onClick={onClose}
+            className="mt-2 text-xs text-neutral-500 hover:text-neutral-300"
+          >
+            close ✕
+          </button>
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -714,15 +745,9 @@ function AnnotatedOriginal({
           {activeTerm && (
             <button
               onClick={() => onOpenTerm(activeTerm.id)}
-              className="mt-1.5 block w-full rounded-md p-1 text-left text-xs text-neutral-400 transition-colors hover:bg-neutral-800/80"
+              className="mt-1 block text-xs text-neutral-400 hover:text-neutral-200"
             >
-              <span className="font-semibold text-neutral-300">
-                {activeTerm.term}
-              </span>{" "}
-              — {activeTerm.l1}{" "}
-              <span className="whitespace-nowrap text-neutral-500">
-                go deeper ▸
-              </span>
+              {activeTerm.term} ▸
             </button>
           )}
         </div>
