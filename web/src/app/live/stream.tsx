@@ -881,6 +881,17 @@ function ChipBoard({
   onLearned: (termId: number) => void;
 }) {
   const [activeTermId, setActiveTermId] = useState<number | null>(null);
+  const [sort, setSort] = useState<"time" | "domain">("time");
+
+  const byTime = useMemo(
+    () =>
+      [...terms].sort(
+        (a, b) =>
+          b.lastSeenAt.localeCompare(a.lastSeenAt) ||
+          (b.salience ?? 0) - (a.salience ?? 0),
+      ),
+    [terms],
+  );
 
   const groups = useMemo(() => {
     const byDomain = new Map<string, LiveTerm[]>();
@@ -904,8 +915,64 @@ function ChipBoard({
       ? (terms.find((t) => t.id === activeTermId) ?? null)
       : null;
 
+  const chip = (t: LiveTerm) => (
+    <button
+      key={t.id}
+      title={`${t.domain} · last seen ${timeOf(t.lastSeenAt)}`}
+      onClick={() => setActiveTermId((cur) => (cur === t.id ? null : t.id))}
+      className={`rounded-full border px-3 py-1.5 text-sm transition-colors ${
+        activeTermId === t.id
+          ? "border-amber-300/60 bg-amber-300/20 text-amber-100"
+          : t.learnedAt
+            ? "border-neutral-800 text-neutral-500 hover:border-neutral-600 hover:text-neutral-300"
+            : "border-amber-300/30 bg-amber-300/5 text-amber-100/90 hover:bg-amber-300/15"
+      }`}
+    >
+      {t.term}
+      {freshTermIds.has(t.id) && !t.learnedAt && (
+        <span className="ml-1.5 inline-block h-1.5 w-1.5 rounded-full bg-amber-300 align-middle" />
+      )}
+    </button>
+  );
+
+  const sortToggle = terms.length > 0 && (
+    <div className="mb-4 flex justify-end">
+      <span className="flex overflow-hidden rounded-md border border-neutral-800 text-xs">
+        {(["time", "domain"] as const).map((s) => (
+          <button
+            key={s}
+            onClick={() => setSort(s)}
+            className={`px-2 py-1 transition-colors ${sort === s ? "bg-neutral-800 text-neutral-200" : "text-neutral-500 hover:text-neutral-300"}`}
+          >
+            {s === "time" ? "newest" : "by domain"}
+          </button>
+        ))}
+      </span>
+    </div>
+  );
+
+  if (sort === "time") {
+    // Default: one flat timeline of chips, newest sighting first.
+    return (
+      <div>
+        {sortToggle}
+        <div className="flex flex-wrap gap-2">{byTime.map(chip)}</div>
+        {active && (
+          <InlineTermCard
+            key={active.id}
+            term={active}
+            onClose={() => setActiveTermId(null)}
+            onExpanded={onExpanded}
+            onLearned={onLearned}
+          />
+        )}
+      </div>
+    );
+  }
+
   return (
     <div className="flex flex-col gap-6">
+      {sortToggle}
       {groups.map(({ domain, list }) => {
         const fresh = list.filter(
           (t) => freshTermIds.has(t.id) && !t.learnedAt,
@@ -920,28 +987,7 @@ function ChipBoard({
                 </span>
               )}
             </h2>
-            <div className="flex flex-wrap gap-2">
-              {list.map((t) => (
-                <button
-                  key={t.id}
-                  onClick={() =>
-                    setActiveTermId((cur) => (cur === t.id ? null : t.id))
-                  }
-                  className={`rounded-full border px-3 py-1.5 text-sm transition-colors ${
-                    activeTermId === t.id
-                      ? "border-amber-300/60 bg-amber-300/20 text-amber-100"
-                      : t.learnedAt
-                        ? "border-neutral-800 text-neutral-500 hover:border-neutral-600 hover:text-neutral-300"
-                        : "border-amber-300/30 bg-amber-300/5 text-amber-100/90 hover:bg-amber-300/15"
-                  }`}
-                >
-                  {t.term}
-                  {freshTermIds.has(t.id) && !t.learnedAt && (
-                    <span className="ml-1.5 inline-block h-1.5 w-1.5 rounded-full bg-amber-300 align-middle" />
-                  )}
-                </button>
-              ))}
-            </div>
+            <div className="flex flex-wrap gap-2">{list.map(chip)}</div>
             {active && active.domain === domain && (
               <InlineTermCard
                 key={active.id}
