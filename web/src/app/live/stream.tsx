@@ -51,6 +51,75 @@ export type LiveDigest = {
 
 const HIGHLIGHT_THRESHOLD = 0.7;
 
+// Every domain gets a stable color identity — chips are the product surface,
+// so they carry the visual weight. Class strings are complete literals so
+// Tailwind's scanner picks them up.
+type DomainColor = {
+  chip: string; // unlearned: bright, glowing
+  active: string; // selected chip
+  dot: string;
+  header: string;
+};
+
+const DOMAIN_PALETTE: DomainColor[] = [
+  {
+    chip: "border-amber-300/40 bg-amber-300/10 text-amber-100 shadow-[0_0_14px_rgba(252,211,77,0.15)] hover:bg-amber-300/20",
+    active: "border-amber-300/80 bg-amber-300/25 text-amber-50 shadow-[0_0_18px_rgba(252,211,77,0.3)]",
+    dot: "bg-amber-300",
+    header: "text-amber-200/80",
+  },
+  {
+    chip: "border-sky-300/40 bg-sky-300/10 text-sky-100 shadow-[0_0_14px_rgba(125,211,252,0.15)] hover:bg-sky-300/20",
+    active: "border-sky-300/80 bg-sky-300/25 text-sky-50 shadow-[0_0_18px_rgba(125,211,252,0.3)]",
+    dot: "bg-sky-300",
+    header: "text-sky-200/80",
+  },
+  {
+    chip: "border-emerald-300/40 bg-emerald-300/10 text-emerald-100 shadow-[0_0_14px_rgba(110,231,183,0.15)] hover:bg-emerald-300/20",
+    active: "border-emerald-300/80 bg-emerald-300/25 text-emerald-50 shadow-[0_0_18px_rgba(110,231,183,0.3)]",
+    dot: "bg-emerald-300",
+    header: "text-emerald-200/80",
+  },
+  {
+    chip: "border-violet-300/40 bg-violet-300/10 text-violet-100 shadow-[0_0_14px_rgba(196,181,253,0.15)] hover:bg-violet-300/20",
+    active: "border-violet-300/80 bg-violet-300/25 text-violet-50 shadow-[0_0_18px_rgba(196,181,253,0.3)]",
+    dot: "bg-violet-300",
+    header: "text-violet-200/80",
+  },
+  {
+    chip: "border-rose-300/40 bg-rose-300/10 text-rose-100 shadow-[0_0_14px_rgba(253,164,175,0.15)] hover:bg-rose-300/20",
+    active: "border-rose-300/80 bg-rose-300/25 text-rose-50 shadow-[0_0_18px_rgba(253,164,175,0.3)]",
+    dot: "bg-rose-300",
+    header: "text-rose-200/80",
+  },
+  {
+    chip: "border-cyan-300/40 bg-cyan-300/10 text-cyan-100 shadow-[0_0_14px_rgba(103,232,249,0.15)] hover:bg-cyan-300/20",
+    active: "border-cyan-300/80 bg-cyan-300/25 text-cyan-50 shadow-[0_0_18px_rgba(103,232,249,0.3)]",
+    dot: "bg-cyan-300",
+    header: "text-cyan-200/80",
+  },
+  {
+    chip: "border-lime-300/40 bg-lime-300/10 text-lime-100 shadow-[0_0_14px_rgba(190,242,100,0.15)] hover:bg-lime-300/20",
+    active: "border-lime-300/80 bg-lime-300/25 text-lime-50 shadow-[0_0_18px_rgba(190,242,100,0.3)]",
+    dot: "bg-lime-300",
+    header: "text-lime-200/80",
+  },
+  {
+    chip: "border-orange-300/40 bg-orange-300/10 text-orange-100 shadow-[0_0_14px_rgba(253,186,116,0.15)] hover:bg-orange-300/20",
+    active: "border-orange-300/80 bg-orange-300/25 text-orange-50 shadow-[0_0_18px_rgba(253,186,116,0.3)]",
+    dot: "bg-orange-300",
+    header: "text-orange-200/80",
+  },
+];
+
+function domainColor(domain: string): DomainColor {
+  let h = 0;
+  for (let i = 0; i < domain.length; i++) {
+    h = (h * 31 + domain.charCodeAt(i)) >>> 0;
+  }
+  return DOMAIN_PALETTE[h % DOMAIN_PALETTE.length];
+}
+
 function timeOf(ts: string) {
   return new Date(ts).toLocaleTimeString([], {
     hour: "2-digit",
@@ -595,8 +664,10 @@ function MessageRow({
               }
               className={`rounded-full border px-2.5 py-0.5 text-xs transition-colors ${
                 activeTermId === t.id
-                  ? "border-amber-300/50 bg-amber-300/15 text-amber-100"
-                  : "border-neutral-700 text-neutral-400 hover:border-neutral-500 hover:text-neutral-200"
+                  ? domainColor(t.domain).active
+                  : t.learnedAt
+                    ? "border-neutral-700 text-neutral-400 hover:border-neutral-500 hover:text-neutral-200"
+                    : domainColor(t.domain).chip
               }`}
             >
               {t.term}
@@ -915,25 +986,36 @@ function ChipBoard({
       ? (terms.find((t) => t.id === activeTermId) ?? null)
       : null;
 
-  const chip = (t: LiveTerm) => (
-    <button
-      key={t.id}
-      title={`${t.domain} · last seen ${timeOf(t.lastSeenAt)}`}
-      onClick={() => setActiveTermId((cur) => (cur === t.id ? null : t.id))}
-      className={`rounded-full border px-3 py-1.5 text-sm transition-colors ${
-        activeTermId === t.id
-          ? "border-amber-300/60 bg-amber-300/20 text-amber-100"
-          : t.learnedAt
-            ? "border-neutral-800 text-neutral-500 hover:border-neutral-600 hover:text-neutral-300"
-            : "border-amber-300/30 bg-amber-300/5 text-amber-100/90 hover:bg-amber-300/15"
-      }`}
-    >
-      {t.term}
-      {freshTermIds.has(t.id) && !t.learnedAt && (
-        <span className="ml-1.5 inline-block h-1.5 w-1.5 rounded-full bg-amber-300 align-middle" />
-      )}
-    </button>
-  );
+  // Unlearned chips are big, colored by domain, and glow; learned chips
+  // recede. Fresh ones pop in and carry a pulsing dot.
+  const chip = (t: LiveTerm) => {
+    const c = domainColor(t.domain);
+    const isActive = activeTermId === t.id;
+    const fresh = freshTermIds.has(t.id) && !t.learnedAt;
+    return (
+      <button
+        key={t.id}
+        title={`${t.domain} · last seen ${timeOf(t.lastSeenAt)}`}
+        onClick={() => setActiveTermId((cur) => (cur === t.id ? null : t.id))}
+        className={`rounded-full border font-medium transition-all duration-150 hover:scale-105 active:scale-95 ${
+          fresh ? "animate-[chip-in_0.3s_ease-out]" : ""
+        } ${
+          isActive
+            ? `px-5 py-2.5 text-base ${c.active}`
+            : t.learnedAt
+              ? "border-neutral-800 bg-neutral-900/40 px-3.5 py-1.5 text-sm text-neutral-500 hover:border-neutral-600 hover:text-neutral-300"
+              : `px-5 py-2.5 text-base ${c.chip}`
+        }`}
+      >
+        {t.term}
+        {fresh && (
+          <span
+            className={`ml-2 inline-block h-2 w-2 animate-pulse rounded-full align-middle ${c.dot}`}
+          />
+        )}
+      </button>
+    );
+  };
 
   const sortToggle = terms.length > 0 && (
     <div className="mb-4 flex justify-end">
@@ -956,7 +1038,7 @@ function ChipBoard({
     return (
       <div>
         {sortToggle}
-        <div className="flex flex-wrap gap-2">{byTime.map(chip)}</div>
+        <div className="flex flex-wrap items-center gap-2.5">{byTime.map(chip)}</div>
         {active && (
           <InlineTermCard
             key={active.id}
@@ -979,15 +1061,20 @@ function ChipBoard({
         ).length;
         return (
           <section key={domain}>
-            <h2 className="mb-2 text-xs font-semibold uppercase tracking-widest text-neutral-500">
+            <h2
+              className={`mb-2.5 flex items-center gap-2 text-xs font-semibold uppercase tracking-widest ${domainColor(domain).header}`}
+            >
+              <span
+                className={`inline-block h-2 w-2 rounded-full ${domainColor(domain).dot}`}
+              />
               {domain}
               {fresh > 0 && (
-                <span className="ml-2 rounded-full bg-amber-300/15 px-1.5 py-0.5 font-normal normal-case tracking-normal text-amber-200">
+                <span className="rounded-full bg-neutral-800 px-1.5 py-0.5 font-normal normal-case tracking-normal text-neutral-300">
                   {fresh} new
                 </span>
               )}
             </h2>
-            <div className="flex flex-wrap gap-2">{list.map(chip)}</div>
+            <div className="flex flex-wrap items-center gap-2.5">{list.map(chip)}</div>
             {active && active.domain === domain && (
               <InlineTermCard
                 key={active.id}
