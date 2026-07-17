@@ -499,11 +499,6 @@ export default function LiveStream() {
         </span>
       </header>
 
-      <aside className="relative z-10 border-b border-white/[0.06] bg-neutral-900/60 px-4 py-2 text-center text-xs text-neutral-400">
-        Install alongside your macOS/Linux AI agent: {" "}
-        <code className="text-neutral-200">{INSTALL_COMMAND}</code>
-      </aside>
-
       {view === "board" ? (
         <>
           <div className="relative z-10 flex-1 overflow-y-auto px-4 py-6">
