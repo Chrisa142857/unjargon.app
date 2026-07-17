@@ -1,13 +1,16 @@
 import { and, asc, eq, gte, inArray, lte } from "drizzle-orm";
 import { db, tables } from "@/db";
+import { requireUser } from "@/lib/auth";
 
 export const dynamic = "force-dynamic";
 
 // The messages a digest card collapsed — fetched when the user expands it.
 export async function GET(
-  _req: Request,
+  req: Request,
   { params }: { params: Promise<{ id: string }> },
 ) {
+  const user = await requireUser(req);
+  if (user instanceof Response) return user;
   const { id } = await params;
   const digestId = Number(id);
   if (!Number.isInteger(digestId) || digestId <= 0) {
@@ -16,7 +19,9 @@ export async function GET(
   const [digest] = await db
     .select()
     .from(tables.digests)
-    .where(eq(tables.digests.id, digestId));
+    .innerJoin(tables.sessions, eq(tables.digests.sessionId, tables.sessions.id))
+    .innerJoin(tables.devices, eq(tables.sessions.deviceId, tables.devices.id))
+    .where(and(eq(tables.digests.id, digestId), eq(tables.devices.userId, user.id)));
   if (!digest) {
     return Response.json({ error: "digest not found" }, { status: 404 });
   }
@@ -39,9 +44,9 @@ export async function GET(
     .innerJoin(tables.devices, eq(tables.sessions.deviceId, tables.devices.id))
     .where(
       and(
-        eq(tables.messages.sessionId, digest.sessionId),
-        gte(tables.messages.id, digest.fromMessageId),
-        lte(tables.messages.id, digest.toMessageId),
+        eq(tables.messages.sessionId, digest.digests.sessionId),
+        gte(tables.messages.id, digest.digests.fromMessageId),
+        lte(tables.messages.id, digest.digests.toMessageId),
       ),
     )
     .orderBy(asc(tables.messages.id));

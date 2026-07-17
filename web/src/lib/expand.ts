@@ -1,5 +1,5 @@
 import Anthropic from "@anthropic-ai/sdk";
-import { desc, eq } from "drizzle-orm";
+import { and, desc, eq } from "drizzle-orm";
 import { db, tables } from "@/db";
 import {
   TRANSLATION_MODEL,
@@ -17,6 +17,7 @@ const SNIPPET_MAX = 1200;
 
 export async function expandTerm(
   termId: number,
+  userId: number,
   sourceMessageId?: number,
 ): Promise<{ l2: string; l3: string; cached: boolean } | null> {
   const [term] = await db
@@ -24,8 +25,9 @@ export async function expandTerm(
     .from(tables.terms)
     .where(eq(tables.terms.id, termId));
   if (!term) return null;
-  if (term.l2 && term.l3) {
-    return { l2: term.l2, l3: term.l3, cached: true };
+  const [profile] = await db.select().from(tables.userTerms).where(and(eq(tables.userTerms.userId, userId), eq(tables.userTerms.termId, termId)));
+  if (term.l2 && profile?.l3) {
+    return { l2: term.l2, l3: profile.l3, cached: true };
   }
 
   // Find the source message for grounding L3.
@@ -34,7 +36,9 @@ export async function expandTerm(
     const [m] = await db
       .select({ text: tables.messages.text, sessionId: tables.messages.sessionId })
       .from(tables.messages)
-      .where(eq(tables.messages.id, sourceMessageId));
+      .innerJoin(tables.sessions, eq(tables.messages.sessionId, tables.sessions.id))
+      .innerJoin(tables.devices, eq(tables.sessions.deviceId, tables.devices.id))
+      .where(and(eq(tables.messages.id, sourceMessageId), eq(tables.devices.userId, userId)));
     source = m ?? null;
   }
   if (!source) {
@@ -45,7 +49,9 @@ export async function expandTerm(
         tables.messages,
         eq(tables.termSightings.messageId, tables.messages.id),
       )
-      .where(eq(tables.termSightings.termId, termId))
+      .innerJoin(tables.sessions, eq(tables.messages.sessionId, tables.sessions.id))
+      .innerJoin(tables.devices, eq(tables.sessions.deviceId, tables.devices.id))
+      .where(and(eq(tables.termSightings.termId, termId), eq(tables.devices.userId, userId)))
       .orderBy(desc(tables.termSightings.id))
       .limit(1);
     source = sighting ?? null;
@@ -71,8 +77,9 @@ export async function expandTerm(
 
   await db
     .update(tables.terms)
-    .set({ l2: result.level2, l3: result.level3 })
+    .set({ l2: result.level2 })
     .where(eq(tables.terms.id, termId));
+  await db.insert(tables.userTerms).values({ userId, termId, l3: result.level3 }).onConflictDoUpdate({ target: [tables.userTerms.userId, tables.userTerms.termId], set: { l3: result.level3 } });
 
   return { l2: result.level2, l3: result.level3, cached: false };
 }

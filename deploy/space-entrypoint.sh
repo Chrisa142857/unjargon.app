@@ -31,9 +31,5 @@ if [ -z "${ANTHROPIC_API_KEY:-}" ] && [ "${UNJARGON_FAKE_TRANSLATOR:-}" != "1" ]
   echo "[entrypoint] pass through as raw text. Set the secret, or set"
   echo "[entrypoint] UNJARGON_FAKE_TRANSLATOR=1 for the canned offline demo."
 fi
-if [ -z "${INGEST_TOKEN:-}" ]; then
-  echo "[entrypoint] WARNING: INGEST_TOKEN secret not set — /api/ingest will reject everything."
-fi
-
 echo "[entrypoint] starting unjargon on :${PORT:-7860}"
 exec node server.js

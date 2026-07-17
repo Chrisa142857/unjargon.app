@@ -1,4 +1,5 @@
 import { expandTerm } from "@/lib/expand";
+import { requireUser } from "@/lib/auth";
 
 export const dynamic = "force-dynamic";
 
@@ -8,6 +9,8 @@ export async function POST(
   req: Request,
   { params }: { params: Promise<{ id: string }> },
 ) {
+  const user = await requireUser(req);
+  if (user instanceof Response) return user;
   const { id } = await params;
   const termId = Number(id);
   if (!Number.isInteger(termId) || termId <= 0) {
@@ -23,7 +26,7 @@ export async function POST(
   }
 
   try {
-    const result = await expandTerm(termId, messageId);
+    const result = await expandTerm(termId, user.id, messageId);
     if (!result) {
       return Response.json({ error: "term not found" }, { status: 404 });
     }

@@ -1,10 +1,13 @@
-import { countDistinct, eq } from "drizzle-orm";
+import { and, countDistinct, eq } from "drizzle-orm";
 import { db, tables } from "@/db";
+import { requireUser } from "@/lib/auth";
 
 export const dynamic = "force-dynamic";
 
 // The /wiki dataset: every term with usage counts across machines/sessions.
-export async function GET() {
+export async function GET(req: Request) {
+  const user = await requireUser(req);
+  if (user instanceof Response) return user;
   const rows = await db
     .select({
       id: tables.terms.id,
@@ -13,7 +16,7 @@ export async function GET() {
       kind: tables.terms.kind,
       l1: tables.terms.l1,
       l2: tables.terms.l2,
-      l3: tables.terms.l3,
+      l3: tables.userTerms.l3,
       salience: tables.terms.salience,
       sightings: countDistinct(tables.termSightings.messageId),
       sessions: countDistinct(tables.messages.sessionId),
@@ -32,7 +35,10 @@ export async function GET() {
       tables.sessions,
       eq(tables.sessions.id, tables.messages.sessionId),
     )
-    .groupBy(tables.terms.id);
+    .innerJoin(tables.devices, eq(tables.sessions.deviceId, tables.devices.id))
+    .leftJoin(tables.userTerms, and(eq(tables.userTerms.termId, tables.terms.id), eq(tables.userTerms.userId, user.id)))
+    .where(eq(tables.devices.userId, user.id))
+    .groupBy(tables.terms.id, tables.userTerms.l3);
 
   rows.sort(
     (a, b) =>

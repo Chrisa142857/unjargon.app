@@ -1,6 +1,7 @@
-import { desc, eq, inArray, max, ne } from "drizzle-orm";
+import { and, desc, eq, inArray, max, ne } from "drizzle-orm";
 import { db, tables } from "@/db";
 import { getCalibration } from "@/lib/settings";
+import { requireUser } from "@/lib/auth";
 
 export const dynamic = "force-dynamic";
 
@@ -10,18 +11,22 @@ export const dynamic = "force-dynamic";
 //
 // Long sessions: messages already covered by a digest are collapsed —
 // the response carries digest cards plus only the uncovered tail.
-export async function GET() {
+export async function GET(req: Request) {
+  const user = await requireUser(req);
+  if (user instanceof Response) return user;
   const digestRows = await db
     .select()
     .from(tables.digests)
-    .where(ne(tables.digests.summary, "")) // claimed-but-unfinished stay hidden
+    .innerJoin(tables.sessions, eq(tables.digests.sessionId, tables.sessions.id))
+    .innerJoin(tables.devices, eq(tables.sessions.deviceId, tables.devices.id))
+    .where(and(ne(tables.digests.summary, ""), eq(tables.devices.userId, user.id)))
     .orderBy(desc(tables.digests.id))
     .limit(200);
-  digestRows.reverse();
+  const digests = digestRows.map((r) => r.digests).reverse();
 
   // Per session, everything up to the newest digest is covered.
   const coveredTo = new Map<number, number>();
-  for (const d of digestRows) {
+  for (const d of digests) {
     coveredTo.set(
       d.sessionId,
       Math.max(coveredTo.get(d.sessionId) ?? 0, d.toMessageId),
@@ -44,6 +49,7 @@ export async function GET() {
     .from(tables.messages)
     .innerJoin(tables.sessions, eq(tables.messages.sessionId, tables.sessions.id))
     .innerJoin(tables.devices, eq(tables.sessions.deviceId, tables.devices.id))
+    .where(eq(tables.devices.userId, user.id))
     .orderBy(desc(tables.messages.id))
     .limit(100);
   const uncovered = rows.filter(
@@ -82,26 +88,30 @@ export async function GET() {
       kind: tables.terms.kind,
       l1: tables.terms.l1,
       l2: tables.terms.l2,
-      l3: tables.terms.l3,
+      l3: tables.userTerms.l3,
       salience: tables.terms.salience,
-      learnedAt: tables.terms.learnedAt,
+      learnedAt: tables.userTerms.learnedAt,
       createdAt: tables.terms.createdAt,
       lastSeenAt: max(tables.messages.ts),
     })
     .from(tables.terms)
-    .leftJoin(
+    .innerJoin(
       tables.termSightings,
       eq(tables.termSightings.termId, tables.terms.id),
     )
-    .leftJoin(
+    .innerJoin(
       tables.messages,
       eq(tables.messages.id, tables.termSightings.messageId),
     )
-    .groupBy(tables.terms.id);
+    .innerJoin(tables.sessions, eq(tables.messages.sessionId, tables.sessions.id))
+    .innerJoin(tables.devices, eq(tables.sessions.deviceId, tables.devices.id))
+    .leftJoin(tables.userTerms, and(eq(tables.userTerms.termId, tables.terms.id), eq(tables.userTerms.userId, user.id)))
+    .where(eq(tables.devices.userId, user.id))
+    .groupBy(tables.terms.id, tables.userTerms.l3, tables.userTerms.learnedAt);
 
   return Response.json({
     calibration: await getCalibration(),
-    digests: digestRows.map((d) => ({
+    digests: digests.map((d) => ({
       id: d.id,
       sessionId: d.sessionId,
       fromMessageId: d.fromMessageId,

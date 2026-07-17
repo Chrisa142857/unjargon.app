@@ -10,6 +10,7 @@ import {
   translationUserPrompt,
 } from "@/lib/prompts";
 import { getCalibration } from "@/lib/settings";
+import { sessionUserId } from "@/lib/owner";
 
 // The translation pipeline: ingest calls scheduleTranslation(sessionId);
 // ~2s after the last message lands (streaming agents append in bursts, the
@@ -309,7 +310,10 @@ async function storeResult(
     }
   }
 
+  const userId = await sessionUserId(msg.sessionId);
+  if (!userId) return;
   publish({
+    userId,
     type: "translation",
     messageId: msg.id,
     sessionId: msg.sessionId,

@@ -1,4 +1,5 @@
 import { completeDigestWork } from "@/lib/digest";
+import { deviceForRequest } from "@/lib/auth";
 
 export const dynamic = "force-dynamic";
 
@@ -7,9 +8,8 @@ export async function POST(
   req: Request,
   { params }: { params: Promise<{ id: string }> },
 ) {
-  const auth = req.headers.get("authorization") ?? "";
-  const token = auth.startsWith("Bearer ") ? auth.slice(7) : "";
-  if (!process.env.INGEST_TOKEN || token !== process.env.INGEST_TOKEN) {
+  const device = await deviceForRequest(req);
+  if (!device) {
     return Response.json({ error: "invalid device token" }, { status: 401 });
   }
   const { id } = await params;
@@ -26,7 +26,7 @@ export async function POST(
   if (typeof body.summary !== "string" || body.summary.trim() === "") {
     return Response.json({ error: "summary required" }, { status: 400 });
   }
-  const row = await completeDigestWork(digestId, body.summary);
+  const row = await completeDigestWork(digestId, body.summary, device.userId!);
   if (!row) {
     return Response.json(
       { error: "unknown, already completed, or reclaimed digest" },

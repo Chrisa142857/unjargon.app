@@ -1,10 +1,13 @@
 import { subscribe } from "@/lib/bus";
+import { requireUser } from "@/lib/auth";
 
 export const dynamic = "force-dynamic";
 
 // SSE fan-out of new messages to /live viewers. SSE (not WebSockets) by
 // design: simpler and survives proxies.
 export async function GET(req: Request) {
+  const user = await requireUser(req);
+  if (user instanceof Response) return user;
   const encoder = new TextEncoder();
 
   const stream = new ReadableStream({
@@ -13,7 +16,13 @@ export async function GET(req: Request) {
         controller.enqueue(encoder.encode(`data: ${JSON.stringify(data)}\n\n`));
 
       controller.enqueue(encoder.encode(": connected\n\n"));
-      const unsubscribe = subscribe(send);
+      const unsubscribe = subscribe((event) => {
+        if (event.userId === user.id) {
+          const safe = { ...event };
+          delete (safe as Partial<typeof event>).userId;
+          send(safe);
+        }
+      });
 
       // Heartbeat keeps proxies from idling the connection out.
       const heartbeat = setInterval(() => {

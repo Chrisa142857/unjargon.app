@@ -5,20 +5,20 @@
 #     | sh -s -- --server https://unjargon.onrender.com
 #
 # Flags:
-#   --token TOK     device token from the web app (prompts when omitted)
+#   --pair CODE     pairing code from the web app (prompts when omitted)
 #   --server URL    unjargon web app (default https://unjargon.app)
 #   --binary PATH   use a locally built unjargond instead of downloading
 #   --no-service    install binary + config only, don't register a service
 set -eu
 
-TOKEN=""
+PAIR_CODE=""
 SERVER="https://unjargon.app"
 BINARY=""
 SERVICE=1
 
 while [ $# -gt 0 ]; do
   case "$1" in
-    --token)   TOKEN="$2"; shift 2 ;;
+    --pair)    PAIR_CODE="$2"; shift 2 ;;
     --server)  SERVER="$2"; shift 2 ;;
     --binary)  BINARY="$2"; shift 2 ;;
     --no-service) SERVICE=0; shift ;;
@@ -26,16 +26,18 @@ while [ $# -gt 0 ]; do
   esac
 done
 
-if [ -z "$TOKEN" ]; then
+if [ -z "$PAIR_CODE" ]; then
   if [ -r /dev/tty ]; then
-    printf "Render INGEST_TOKEN (from your Render service Environment tab): " > /dev/tty
-    IFS= read -r TOKEN < /dev/tty
+    printf "Pairing code (from unjargon in your browser): " > /dev/tty
+    IFS= read -r PAIR_CODE < /dev/tty
   else
-    echo "error: --token is required when no interactive terminal is available" >&2
+    echo "error: --pair is required when no interactive terminal is available" >&2
     exit 2
   fi
 fi
-[ -n "$TOKEN" ] || { echo "error: INGEST_TOKEN cannot be empty" >&2; exit 2; }
+[ -n "$PAIR_CODE" ] || { echo "error: pairing code cannot be empty" >&2; exit 2; }
+DEVICE=$(hostname | tr -cd 'A-Za-z0-9._-')
+TOKEN=$(curl -fsS -X POST --data-urlencode "code=$PAIR_CODE" --data-urlencode "device=$DEVICE" "$SERVER/api/devices/claim") || { echo "error: could not claim this device" >&2; exit 1; }
 
 OS=$(uname -s | tr '[:upper:]' '[:lower:]')
 case "$(uname -m)" in

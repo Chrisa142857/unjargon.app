@@ -187,16 +187,31 @@ const CALIBRATION_LABELS: [Calibration, string][] = [
 ];
 
 function InstallCollectorCallout() {
+  const [pairingCode, setPairingCode] = useState<string | null>(null);
+  const [pairingError, setPairingError] = useState<string | null>(null);
+
+  async function createPairingCode() {
+    setPairingError(null);
+    const res = await fetch(api("/api/devices/pair"), { method: "POST" });
+    if (!res.ok) return setPairingError("Could not create a pairing code. Please try again.");
+    setPairingCode((await res.json()).code);
+  }
+
   return (
     <div className="mx-auto mt-20 max-w-2xl rounded-xl border border-amber-200/20 bg-amber-300/[0.06] px-6 py-7 text-center shadow-[0_0_45px_rgba(252,211,77,0.06)]">
       <p className="text-base font-medium text-amber-100">Connect an AI agent</p>
       <p className="mt-2 text-sm text-neutral-400">
         Run this on the macOS or Linux machine where Claude Code or Codex works.
-        The installer securely prompts for your Render <code>INGEST_TOKEN</code>.
+        First create a pairing code below; the installer securely prompts for it.
       </p>
       <code className="mt-5 block overflow-x-auto rounded-lg border border-white/[0.08] bg-neutral-950 px-4 py-3 text-left text-xs text-neutral-200">
         {INSTALL_COMMAND}
       </code>
+      <button onClick={createPairingCode} className="mt-4 rounded-md bg-amber-200 px-4 py-2 text-sm font-medium text-neutral-950 hover:bg-amber-100">
+        {pairingCode ? "Make a new pairing code" : "Create pairing code"}
+      </button>
+      {pairingCode && <p className="mt-3 text-sm text-amber-100">Pairing code: <code className="select-all font-semibold">{pairingCode}</code> <span className="text-neutral-400">(expires in 10 minutes)</span></p>}
+      {pairingError && <p className="mt-3 text-sm text-rose-300">{pairingError}</p>}
     </div>
   );
 }
@@ -227,6 +242,10 @@ export default function LiveStream() {
     (async () => {
       try {
         const res = await fetch(api("/api/bootstrap"));
+        if (res.status === 401) {
+          window.location.assign(api("/api/auth/google"));
+          return;
+        }
         if (!res.ok) throw new Error(`bootstrap failed (${res.status})`);
         const data = await res.json();
         if (cancelled) return;

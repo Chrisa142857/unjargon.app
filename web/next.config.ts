@@ -14,31 +14,6 @@ const nextConfig: NextConfig = {
   trailingSlash: isPages,
   // Compression buffers streamed responses — it would break SSE.
   compress: false,
-  ...(isPages
-    ? {}
-    : {
-        async headers() {
-          return [
-            {
-              // CORS so the GitHub Pages frontend (different origin) can call
-              // the API and subscribe to SSE. No cookies are used; /api/ingest
-              // is bearer-token guarded.
-              source: "/api/:path*",
-              headers: [
-                { key: "Access-Control-Allow-Origin", value: "*" },
-                {
-                  key: "Access-Control-Allow-Methods",
-                  value: "GET, POST, OPTIONS",
-                },
-                {
-                  key: "Access-Control-Allow-Headers",
-                  value: "Content-Type, Authorization",
-                },
-              ],
-            },
-          ];
-        },
-      }),
 };
 
 export default nextConfig;

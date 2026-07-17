@@ -11,8 +11,25 @@ import {
 // A machine running an unjargond collector (laptop, HPC login node, ...).
 export const devices = pgTable("devices", {
   id: serial("id").primaryKey(),
-  name: text("name").notNull().unique(),
+  userId: integer("user_id").references(() => users.id),
+  name: text("name").notNull(),
+  tokenHash: text("token_hash"),
   lastSeenAt: timestamp("last_seen_at", { withTimezone: true }).defaultNow().notNull(),
+}, (t) => [uniqueIndex("devices_user_name").on(t.userId, t.name)]);
+
+export const users = pgTable("users", {
+  id: serial("id").primaryKey(),
+  googleSub: text("google_sub").notNull().unique(),
+  email: text("email").notNull(),
+  name: text("name"),
+  calibration: text("calibration").notNull().default("new"),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+});
+
+export const pairings = pgTable("pairings", {
+  codeHash: text("code_hash").primaryKey(),
+  userId: integer("user_id").notNull().references(() => users.id),
+  expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
 });
 
 // One agent session = one transcript file on one device.
@@ -89,6 +106,15 @@ export const terms = pgTable("terms", {
   learnedAt: timestamp("learned_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
 });
+
+// User-specific state. L1/L2 remain shared generic glossary entries; L3 is
+// grounded in a user's transcript and must never be shared.
+export const userTerms = pgTable("user_terms", {
+  userId: integer("user_id").notNull().references(() => users.id),
+  termId: integer("term_id").notNull().references(() => terms.id),
+  l3: text("l3"),
+  learnedAt: timestamp("learned_at", { withTimezone: true }),
+}, (t) => [uniqueIndex("user_terms_user_term").on(t.userId, t.termId)]);
 
 // An inline highlight in one message: the exact span of jargon plus the
 // plain-language rewrite of the sentence it appears in.

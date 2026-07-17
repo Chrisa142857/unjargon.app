@@ -1,4 +1,6 @@
+import { eq } from "drizzle-orm";
 import { db, tables } from "@/db";
+import { deviceForRequest } from "@/lib/auth";
 import { publish } from "@/lib/bus";
 import { scheduleDigestCheck } from "@/lib/digest";
 import {
@@ -24,11 +26,9 @@ function bad(status: number, error: string) {
 }
 
 export async function POST(req: Request) {
-  const auth = req.headers.get("authorization") ?? "";
-  const token = auth.startsWith("Bearer ") ? auth.slice(7) : "";
-  if (!process.env.INGEST_TOKEN || token !== process.env.INGEST_TOKEN) {
-    return bad(401, "invalid device token");
-  }
+  const device = await deviceForRequest(req);
+  if (!device) return bad(401, "invalid device token");
+  const userId = device.userId as number;
 
   let body: IngestBody;
   try {
@@ -49,14 +49,8 @@ export async function POST(req: Request) {
   );
   if (msgs.length === 0) return Response.json({ stored: 0 });
 
-  const [device] = await db
-    .insert(tables.devices)
-    .values({ name: body.device })
-    .onConflictDoUpdate({
-      target: tables.devices.name,
-      set: { lastSeenAt: new Date() },
-    })
-    .returning();
+  if (body.device !== device.name) return bad(403, "device name does not match token");
+  await db.update(tables.devices).set({ lastSeenAt: new Date() }).where(eq(tables.devices.id, device.id));
 
   const [session] = await db
     .insert(tables.sessions)
@@ -86,6 +80,7 @@ export async function POST(req: Request) {
 
   for (const row of stored) {
     publish({
+      userId,
       type: "message",
       message: {
         id: row.id,

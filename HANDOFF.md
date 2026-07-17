@@ -72,9 +72,8 @@ Definition of demo-done: two collectors (Mac laptop + Linux VM) feeding one `/li
   copy-paste collector install command. Do not re-add a persistent top banner;
   it was intentionally removed.
 - **Installer:** `install.sh` is served from GitHub raw content and downloads
-  binaries from GitHub Releases. It currently prompts for the legacy demo
-  ingest credential. This is not a user-onboarding flow; replace it with the
-  device-pairing flow in section 10 before inviting users:
+  binaries from GitHub Releases. It prompts for a short-lived pairing code
+  created by the signed-in user in `/live`; it never asks for a Render secret:
 
   ```sh
   curl -fsSL https://raw.githubusercontent.com/Chrisa142857/unjargon.app/main/install.sh \
@@ -89,21 +88,21 @@ Definition of demo-done: two collectors (Mac laptop + Linux VM) feeding one `/li
   not reliable in the development checkout (`ENOTEMPTY` in generated
   `node_modules`); use the clean GitHub Actions build as the recorded check.
 
-## 9. Critical product gap: this is not yet multi-user
+## 9. Hosted-user implementation (July 2026)
 
-The deployed service is **one shared prototype**, not a tenant-safe hosted
-product:
+The application now has the minimal hosted-user boundary:
 
-- No email/login/session auth exists in the application.
-- `/api/ingest` authenticates every collector using one global Render
-  `INGEST_TOKEN`.
-- Devices, sessions, messages, terms, and settings have no `user_id` or
-  `workspace_id`; the current API therefore combines data across all users.
+- Google OAuth creates an HttpOnly, signed browser session.
+- `users`, `pairings`, `devices.user_id`, and hashed per-device tokens are in
+  `drizzle/0003_users.sql`.
+- `/api/ingest` accepts only a paired device credential; the global
+  `INGEST_TOKEN` is obsolete.
+- Bootstrap and SSE reads are filtered by device owner. Generic L1/L2 terms
+  remain shared; L3 and learned state are in `user_terms`.
 - Render's dashboard is only for the owner's infrastructure administration;
   it must not be the customer/admin interface for the application.
 
-**Do not involve the Render `INGEST_TOKEN` in user onboarding.** It is a
-temporary owner/demo implementation detail, not a customer credential.
+Render is the owner's infrastructure dashboard, not a customer interface.
 
 ## 10. Minimum hosted-user migration (do this, skip the rest)
 
@@ -111,20 +110,12 @@ Render is owner-managed infrastructure. Users need ordinary individual
 accounts; do not add workspaces, memberships, or app-level admin roles until
 the product actually needs shared teams.
 
-1. Move to managed Postgres first. Do not put registered-user data in the
-   bundled ephemeral database.
-2. Add email magic-link authentication and a minimal `users` table. Add only
-   `devices.user_id`; sessions/messages already reach a user through their
-   device, so do not stamp `user_id` on every table. Make device names unique
-   per user, and filter every read through the device owner.
-3. After browser sign-in, create a short-lived pairing code. The installer
-   exchanges it once for a hashed, revocable **per-device credential**. The
-   collector uses that credential for ingest; no Render secret is shown to or
-   copied by a user.
-4. Keep the glossary global only where it is genuinely generic: canonical
-   term + L1/L2. Store learned state and L3 (the session-specific explanation)
-   per user. Never place raw transcripts, filenames, project paths, or message
-   annotations in the shared cache.
+1. Use managed Postgres before inviting users; bundled database storage is
+   ephemeral.
+2. Apply `0003_users.sql` (the container entrypoint does this on deploy).
+3. Remaining hardening: require owner checks on every legacy auxiliary route
+   (`/api/wiki`, digest detail, and local-work endpoints) before exposing them
+   to more than the owner.
 
 Add teams/workspaces, customer-facing admin screens, and provider OAuth only
 when a real customer requires them. The owner manages deployment, logs, and

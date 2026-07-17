@@ -18,9 +18,8 @@ services:
     envVars:
       - key: PORT
         value: "7860"
-      - key: INGEST_TOKEN
-        generateValue: true # shown in the Render dashboard; collectors present it
       # Optional overrides (set in the dashboard when wanted):
+      # GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, AUTH_SECRET, APP_URL=https://unjargon.onrender.com
       # ANTHROPIC_API_KEY      — server-side translation fallback (collectors
       #                          default to local-translate with the user's CLI)
       # UNJARGON_FAKE_TRANSLATOR=1 — canned offline demo mode

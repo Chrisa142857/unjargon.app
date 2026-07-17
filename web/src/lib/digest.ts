@@ -2,6 +2,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import { and, asc, desc, eq, gt, isNotNull, lt, max, sql } from "drizzle-orm";
 import { db, tables } from "@/db";
 import { publish } from "@/lib/bus";
+import { sessionUserId } from "@/lib/owner";
 import {
   TRANSLATION_MODEL,
   digestSystemPrompt,
@@ -122,8 +123,11 @@ async function insertDigest(
   return rows[0] ?? null;
 }
 
-function publishDigest(row: DigestRow) {
+async function publishDigest(row: DigestRow) {
+  const userId = await sessionUserId(row.sessionId);
+  if (!userId) return;
   publish({
+    userId,
     type: "digest",
     digest: {
       id: row.id,
@@ -157,7 +161,7 @@ export function scheduleDigestCheck(sessionId: number) {
         if (!chunk) return;
         const summary = await generateDigest(sessionId, chunk);
         const row = await insertDigest(sessionId, chunk, summary);
-        if (row) publishDigest(row);
+        if (row) await publishDigest(row);
       }
     } catch (err) {
       console.error(`[digest] session ${sessionId} failed:`, err);
@@ -211,7 +215,7 @@ async function generateDigest(
 // Claim the next pending digest chunk for a collector worker. Creates a
 // placeholder row (summary '') so no one else claims the same chunk; stale
 // claims are reaped after CLAIM_TTL_MS.
-export async function claimDigestWork(): Promise<
+export async function claimDigestWork(userId: number): Promise<
   { id: number; prompt: string } | null
 > {
   await db
@@ -227,6 +231,9 @@ export async function claimDigestWork(): Promise<
   const sessions = await db
     .select({ sessionId: tables.messages.sessionId })
     .from(tables.messages)
+    .innerJoin(tables.sessions, eq(tables.messages.sessionId, tables.sessions.id))
+    .innerJoin(tables.devices, eq(tables.sessions.deviceId, tables.devices.id))
+    .where(eq(tables.devices.userId, userId))
     .groupBy(tables.messages.sessionId)
     .orderBy(desc(sql`max(${tables.messages.id})`))
     .limit(20);
@@ -250,13 +257,14 @@ export async function claimDigestWork(): Promise<
 export async function completeDigestWork(
   id: number,
   summary: string,
+  userId: number,
 ): Promise<DigestRow | null> {
   const trimmed = summary.trim().slice(0, 2000);
   if (!trimmed) return null;
   const rows = await db
     .update(tables.digests)
     .set({ summary: trimmed })
-    .where(and(eq(tables.digests.id, id), eq(tables.digests.summary, "")))
+    .where(and(eq(tables.digests.id, id), eq(tables.digests.summary, ""), sql`${tables.digests.sessionId} in (select ${tables.sessions.id} from ${tables.sessions} join ${tables.devices} on ${tables.sessions.deviceId} = ${tables.devices.id} where ${tables.devices.userId} = ${userId})`))
     .returning();
   if (!rows[0]) return null;
   publishDigest(rows[0]);

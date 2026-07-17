@@ -6,6 +6,7 @@ import { EventEmitter } from "node:events";
 // internals for Postgres LISTEN/NOTIFY — the interface stays the same.
 
 export type MessageEvent = {
+  userId: number;
   type: "message";
   message: {
     id: number;
@@ -23,6 +24,7 @@ export type MessageEvent = {
 // passthrough: the message was trivial (skipped) or translation failed —
 // either way the client stops showing "translating" and renders raw text.
 export type TranslationEvent = {
+  userId: number;
   type: "translation";
   messageId: number;
   sessionId: number;
@@ -45,6 +47,7 @@ export type TranslationEvent = {
 
 // A rollup card replacing messages [fromMessageId, toMessageId] in the stream.
 export type DigestEvent = {
+  userId: number;
   type: "digest";
   digest: {
     id: number;

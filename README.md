@@ -98,8 +98,9 @@ curl -fsSL https://raw.githubusercontent.com/Chrisa142857/unjargon.app/main/inst
   | sh -s -- --server https://unjargon.onrender.com
 ```
 
-The installer prompts for your `INGEST_TOKEN`; find it in the Render service's
-Environment tab. It is kept out of your shell history and the public web page.
+Open the hosted app first and sign in with Google. In the empty stream, create
+a short-lived pairing code; the installer prompts for that code and exchanges
+it once for a device-only credential. No Render secret is shared with users.
 
 No root, no runtime deps. The installer drops a single static binary in
 `~/.local/bin`, registers a Claude Code `SessionStart` hook (so the collector is
@@ -123,7 +124,7 @@ Collector guarantees:
 ```sh
 # web app
 cd web
-cp .env.example .env.local   # fill in DATABASE_URL, ANTHROPIC_API_KEY, INGEST_TOKEN
+cp .env.example .env.local   # fill in DATABASE_URL, GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, AUTH_SECRET
 npm install
 npx drizzle-kit push         # create tables
 npm run dev
