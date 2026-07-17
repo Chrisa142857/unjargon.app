@@ -39,10 +39,27 @@ jobs:
           cache-dependency-path: web/package-lock.json
       - run: npm ci
         working-directory: web
+      # Backend URL priority: explicit UNJARGON_API_BASE variable, else derived
+      # from the HF_SPACE variable ("user/space" → https://user-space.hf.space),
+      # else empty (the site asks for a backend URL at runtime).
+      - name: Resolve API base
+        id: apibase
+        env:
+          EXPLICIT: ${{ vars.UNJARGON_API_BASE }}
+          SPACE: ${{ vars.HF_SPACE }}
+        run: |
+          if [ -n "$EXPLICIT" ]; then
+            echo "base=$EXPLICIT" >> "$GITHUB_OUTPUT"
+          elif [ -n "$SPACE" ]; then
+            sub=$(echo "$SPACE" | tr '[:upper:]' '[:lower:]' | tr '/_.' '---')
+            echo "base=https://${sub}.hf.space" >> "$GITHUB_OUTPUT"
+          else
+            echo "base=" >> "$GITHUB_OUTPUT"
+          fi
       - name: Build static export
         working-directory: web
         env:
-          NEXT_PUBLIC_API_BASE: ${{ vars.UNJARGON_API_BASE }}
+          NEXT_PUBLIC_API_BASE: ${{ steps.apibase.outputs.base }}
           NEXT_PUBLIC_BASE_PATH: /${{ github.event.repository.name }}
         run: sh scripts/build-pages.sh
       - uses: actions/upload-pages-artifact@v3

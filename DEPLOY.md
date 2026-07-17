@@ -11,27 +11,28 @@ Two free services, split at the API boundary:
 The Space alone is a complete deployment — the Pages frontend is a bonus
 mirror on your own github.io domain. Collectors point at the Space either way.
 
-## 1. Backend — Hugging Face Space
+## 1. Backend — Hugging Face Space (no local git needed)
+
+The `Sync backend to Hugging Face Space` workflow pushes `main` to your
+Space and sets its `INGEST_TOKEN` secret automatically. One-time setup,
+all in browser UIs:
 
 1. Create the Space: https://huggingface.co/new-space → SDK **Docker**
    (blank template), name it e.g. `unjargon`, CPU basic (free).
-2. Push this repo to the Space (its README frontmatter + Dockerfile are
-   already set up):
+2. Create a Hugging Face **write** token: https://huggingface.co/settings/tokens
+3. In the GitHub repo → Settings → Secrets and variables → Actions, add:
+   - secret `HF_TOKEN` — the token from step 2
+   - secret `UNJARGON_INGEST_TOKEN` — any string you invent; collectors
+     must present it to POST /api/ingest
+   - variable `HF_SPACE` — `<hf-username>/<space-name>` (e.g. `wei/unjargon`)
+4. Run the sync workflow once (Actions → "Sync backend to Hugging Face
+   Space" → Run workflow) — every later push to `main` re-syncs.
+5. Optional Space secret (Space → Settings): `ANTHROPIC_API_KEY` — only a
+   fallback; by default collectors run local-translate mode with the user's
+   own `claude` CLI, so the server needs no key. Or set the variable
+   `UNJARGON_FAKE_TRANSLATOR=1` for the canned offline demo.
 
-   ```sh
-   git remote add hf https://huggingface.co/spaces/<hf-user>/unjargon
-   git push hf main
-   ```
-
-3. In the Space → Settings → Variables and secrets, add:
-   - `INGEST_TOKEN` (secret) — any string; collectors must present it
-   - `ANTHROPIC_API_KEY` (secret) — **optional.** By default collectors run
-     local-translate mode (they reuse the user's own `claude` CLI credentials
-     on the machine where the agent runs), so the server needs no key. Set
-     this only as a fallback for collectors without an AI CLI, or set the
-     variable `UNJARGON_FAKE_TRANSLATOR=1` for the canned offline demo.
-4. Wait for the build; the app is at `https://<hf-user>-unjargon.hf.space`
-   (exact URL shown under the Space's ⋮ → "Embed this Space").
+The app serves at `https://<hf-username>-<space-name>.hf.space`.
 
 Point a collector at it:
 
@@ -53,12 +54,12 @@ automatically.
 One-time repo setup on GitHub:
 
 1. **Settings → Pages** → Source: **GitHub Actions**.
-2. **Settings → Secrets and variables → Actions → Variables** → add
-   `UNJARGON_API_BASE` = `https://<hf-user>-unjargon.hf.space`.
-3. Merge/push to `main` (or run the "Deploy frontend to GitHub Pages"
-   workflow manually).
+2. Push to `main` (or run the "Deploy frontend to GitHub Pages" workflow).
 
-The UI appears at `https://<gh-user>.github.io/<repo>/live/`.
+The UI appears at `https://<gh-user>.github.io/<repo>/live/`. The backend
+URL is baked in automatically from the `HF_SPACE` variable (override with a
+`UNJARGON_API_BASE` variable); with neither set, the site asks for a
+backend URL at runtime and remembers it per browser.
 
 ## Local sanity checks (no accounts needed)
 
