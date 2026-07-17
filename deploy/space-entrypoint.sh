@@ -3,6 +3,8 @@
 # an external DATABASE_URL is provided as a Space secret), apply the schema,
 # start the Next.js standalone server on $PORT.
 set -eu
+# Surface boot failures in the host's log stream (Render/HF show stdout).
+trap 'code=$?; if [ "$code" -ne 0 ]; then echo "[entrypoint] FAILED with exit code $code — see lines above"; fi' EXIT
 
 PGBIN=$(ls -d /usr/lib/postgresql/*/bin | head -1)
 PGDATA="$HOME/pgdata"

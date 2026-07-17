@@ -17,15 +17,15 @@ jobs:
           echo "--- DNS ---"
           host "$(echo "$URL" | sed 's|https://||')" || true
           echo "--- verbose HEAD / (edge headers) ---"
-          curl -sv -o /dev/null --max-time 30 "$URL/" 2>&1 | grep -E "^(<|\*) " | head -30 || true
+          curl -sv -o /dev/null --max-time 12 "$URL/" 2>&1 | grep -E "^(<|\*) " | head -30 || true
           echo "--- GET /live with retries ---"
           code=000
-          for i in $(seq 1 8); do
-            code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 30 "$URL/live") || code=000
+          for i in $(seq 1 2); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 12 "$URL/live") || code=000
             echo "attempt $i: GET /live → $code"
             [ "$code" = "200" ] && break
             sleep 15
           done
           echo "--- GET /api/bootstrap ---"
-          curl -s -D - --max-time 30 "$URL/api/bootstrap" | head -c 600; echo
+          curl -s -D - --max-time 12 "$URL/api/bootstrap" | head -c 600; echo
           [ "$code" = "200" ]
