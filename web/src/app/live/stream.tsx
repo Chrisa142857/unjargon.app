@@ -485,8 +485,8 @@ export default function LiveStream() {
       <aside className="relative z-10 border-b border-white/[0.06] bg-neutral-900/60 px-4 py-2 text-center text-xs text-neutral-400">
         Install alongside your macOS/Linux AI agent: {" "}
         <code className="text-neutral-200">
-          curl -fsSL https://unjargon.app/install.sh | sh -s -- --token
-          {" "}&lt;INGEST_TOKEN&gt; --server https://unjargon.onrender.com
+          curl -fsSL https://raw.githubusercontent.com/Chrisa142857/unjargon.app/main/install.sh |
+          {" "}sh -s -- --token &lt;INGEST_TOKEN&gt; --server https://unjargon.onrender.com
         </code>
       </aside>
 

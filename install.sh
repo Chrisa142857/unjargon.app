@@ -1,7 +1,8 @@
 #!/bin/sh
 # unjargon.app collector installer — user-level, no root, no dependencies.
 #
-#   curl -fsSL https://unjargon.app/install.sh | sh -s -- --token uj_xxx
+#   curl -fsSL https://raw.githubusercontent.com/Chrisa142857/unjargon.app/main/install.sh \
+#     | sh -s -- --token uj_xxx --server https://unjargon.onrender.com
 #
 # Flags:
 #   --token TOK     device token from the web app (required)

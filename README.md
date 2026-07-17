@@ -94,7 +94,8 @@ GitHub Pages via the bundled workflow. Full steps and caveats: `DEPLOY.md`.
 ## Install a collector (any machine your agents run on)
 
 ```sh
-curl -fsSL https://unjargon.app/install.sh | sh -s -- --token uj_xxx
+curl -fsSL https://raw.githubusercontent.com/Chrisa142857/unjargon.app/main/install.sh \
+  | sh -s -- --token uj_xxx --server https://unjargon.onrender.com
 ```
 
 No root, no runtime deps. The installer drops a single static binary in
