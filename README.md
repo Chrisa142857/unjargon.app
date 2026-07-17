@@ -19,12 +19,17 @@ unjargon watches agent transcripts (Claude Code, Codex) wherever your agents run
 laptop, remote box, HPC login node — and serves a live plain-language translation
 plus a click-to-learn glossary in the browser. Observability for humans, not engineers.
 
-- **`/live` — the Unjargon Stream.** Every agent message arrives already translated
-  into 1-3 plain sentences; trivial chatter passes through untouched. ▸ expands the
-  verbatim original with jargon highlighted; tap a highlight for a sentence-level
-  rewrite, go deeper for the L1/L2/L3 term card (L3 is grounded in *your* session).
-  ⌘/ctrl-J flips the whole stream to originals as you outgrow the subtitles, and the
-  calibration selector (new / technical amateur / expert) tunes every rewrite.
+- **`/live` — the term board first.** The primary surface is not the agent's words
+  but what they're teaching you: every picked keyword, initial, and domain term,
+  grouped by domain, freshest first — bright until you open it, dimmed once learned.
+  Tap a chip for the collapsed card (term + one-line explanation); open it for the
+  long in-context explanation grounded in the message it came from. A one-line strip
+  shows the agent's latest activity.
+- **The stream, one toggle away.** The full subtitle feed (1-3 plain sentences per
+  message, trivial chatter passed through untouched) with ▸ to the verbatim
+  annotated original — fidelity is always reachable, just never the default. ⌘/ctrl-J
+  flips subtitles ⇄ originals; the calibration selector (new / technical amateur /
+  expert) tunes every rewrite.
 - **Long sessions collapse, they don't scroll.** Older stretches of the stream roll
   up into digest cards ("Tue 09:00–13:13 · 24 updates: sped up the pipeline 41s→6s,
   fixed two failing tests…") built from the subtitles under the same trust rules —

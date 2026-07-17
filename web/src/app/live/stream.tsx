@@ -19,6 +19,8 @@ export type LiveTerm = {
   l2: string | null;
   l3: string | null;
   salience: number | null;
+  learnedAt: string | null; // opened at least once → chip dims
+  lastSeenAt: string; // latest sighting → board ordering
 };
 
 export type LiveMessage = {
@@ -69,15 +71,19 @@ const CALIBRATION_LABELS: [Calibration, string][] = [
   ["expert", "expert"],
 ];
 
-// The Unjargon Stream: subtitles by default, ▸ expands the annotated
-// original, highlighted spans tap to a sentence-level rewrite. ⌘/ctrl-J
-// flips the whole stream between subtitles and originals.
+// /live, chips first. The primary surface is the term board: picked
+// keywords/initials/domain terms grouped by domain, bright until opened —
+// what the agent's work is teaching you, not what the agent said. A slim
+// strip shows the latest agent activity; the full subtitle/original stream
+// (with digests and highlights) is the secondary view behind a toggle.
 // Data comes from GET /api/bootstrap + the SSE stream, all client-side, so
 // the static GitHub Pages build works against a remote API.
 export default function LiveStream() {
+  const [view, setView] = useState<"board" | "stream">("board");
   const [messages, setMessages] = useState<LiveMessage[]>([]);
   const [digests, setDigests] = useState<LiveDigest[]>([]);
   const [terms, setTerms] = useState<LiveTerm[]>([]);
+  const [freshTermIds, setFreshTermIds] = useState<Set<number>>(new Set());
   const [highlights, setHighlights] = useState(false);
   const [loaded, setLoaded] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -153,6 +159,20 @@ export default function LiveStream() {
       prev.map((t) => (t.id === termId ? { ...t, l2, l3 } : t)),
     );
   }
+
+  // Opening a card = the user looked at it: dim the chip, persist server-side.
+  function markLearned(termId: number) {
+    setTerms((prev) =>
+      prev.map((t) =>
+        t.id === termId && !t.learnedAt
+          ? { ...t, learnedAt: new Date().toISOString() }
+          : t,
+      ),
+    );
+    fetch(api(`/api/terms/${termId}/learned`), { method: "POST" }).catch(
+      () => {},
+    );
+  }
   const bottomRef = useRef<HTMLDivElement>(null);
   const scrollerRef = useRef<HTMLDivElement>(null);
 
@@ -202,14 +222,39 @@ export default function LiveStream() {
               : m,
           ),
         );
+        const now = new Date().toISOString();
         if (event.newTerms.length > 0) {
           setTerms((prev) => {
             const seen = new Set(prev.map((t) => t.id));
             const fresh = event.newTerms
               .filter((t: LiveTerm) => !seen.has(t.id))
-              .map((t: LiveTerm) => ({ ...t, l2: t.l2 ?? null, l3: t.l3 ?? null }));
+              .map((t: LiveTerm) => ({
+                ...t,
+                l2: t.l2 ?? null,
+                l3: t.l3 ?? null,
+                learnedAt: null,
+                lastSeenAt: now,
+              }));
             return [...prev, ...fresh];
           });
+          setFreshTermIds((prev) => {
+            const next = new Set(prev);
+            for (const t of event.newTerms) next.add(t.id);
+            return next;
+          });
+        }
+        // Existing terms sighted again in this message bubble up the board.
+        const sighted = new Set<number>(
+          (event.annotations ?? [])
+            .map((a: LiveAnnotation) => a.termId)
+            .filter((x: number | null) => x !== null),
+        );
+        if (sighted.size > 0) {
+          setTerms((prev) =>
+            prev.map((t) =>
+              sighted.has(t.id) ? { ...t, lastSeenAt: now } : t,
+            ),
+          );
         }
       }
     };
@@ -253,34 +298,52 @@ export default function LiveStream() {
           </span>
         )}
         <span className="ml-auto flex items-center gap-2">
+          <span className="flex overflow-hidden rounded-md border border-neutral-700 text-xs">
+            <button
+              onClick={() => setView("board")}
+              className={`px-2 py-1 transition-colors ${view === "board" ? "bg-amber-300/15 text-amber-100" : "text-neutral-400 hover:text-neutral-100"}`}
+            >
+              terms
+            </button>
+            <button
+              onClick={() => setView("stream")}
+              className={`px-2 py-1 transition-colors ${view === "stream" ? "bg-amber-300/15 text-amber-100" : "text-neutral-400 hover:text-neutral-100"}`}
+            >
+              stream
+            </button>
+          </span>
           <Link
             href="/wiki"
             className="rounded-md border border-neutral-700 px-2 py-1 text-xs text-neutral-400 hover:text-neutral-100"
           >
             wiki
           </Link>
-          <button
-            onClick={() => setHighlights((v) => !v)}
-            title="only decisions, outcomes, and failures"
-            className={`rounded-md border px-2 py-1 text-xs transition-colors ${
-              highlights
-                ? "border-emerald-300/40 bg-emerald-300/10 text-emerald-200"
-                : "border-neutral-700 text-neutral-400 hover:text-neutral-100"
-            }`}
-          >
-            ★ highlights
-          </button>
-          <button
-            onClick={() => setShowOriginals((v) => !v)}
-            title="toggle subtitles ⇄ originals (⌘J)"
-            className={`rounded-md border px-2 py-1 text-xs transition-colors ${
-              showOriginals
-                ? "border-amber-300/40 bg-amber-300/10 text-amber-200"
-                : "border-neutral-700 text-neutral-400 hover:text-neutral-100"
-            }`}
-          >
-            {showOriginals ? "originals" : "subtitles"}
-          </button>
+          {view === "stream" && (
+            <>
+              <button
+                onClick={() => setHighlights((v) => !v)}
+                title="only decisions, outcomes, and failures"
+                className={`rounded-md border px-2 py-1 text-xs transition-colors ${
+                  highlights
+                    ? "border-emerald-300/40 bg-emerald-300/10 text-emerald-200"
+                    : "border-neutral-700 text-neutral-400 hover:text-neutral-100"
+                }`}
+              >
+                ★
+              </button>
+              <button
+                onClick={() => setShowOriginals((v) => !v)}
+                title="toggle subtitles ⇄ originals (⌘J)"
+                className={`rounded-md border px-2 py-1 text-xs transition-colors ${
+                  showOriginals
+                    ? "border-amber-300/40 bg-amber-300/10 text-amber-200"
+                    : "border-neutral-700 text-neutral-400 hover:text-neutral-100"
+                }`}
+              >
+                {showOriginals ? "orig" : "sub"}
+              </button>
+            </>
+          )}
           <select
             value={calibration}
             onChange={(e) => changeCalibration(e.target.value as Calibration)}
@@ -296,72 +359,109 @@ export default function LiveStream() {
         </span>
       </header>
 
-      <div
-        ref={scrollerRef}
-        onScroll={onScroll}
-        className="flex-1 overflow-y-auto px-4 py-6"
-      >
-        <div className="mx-auto flex max-w-2xl flex-col gap-7">
-          {messages.length === 0 && digests.length === 0 && (
-            <p className="mt-24 text-center text-neutral-500">
-              {!loaded ? (
-                "loading…"
-              ) : loadError ? (
-                <>couldn&apos;t reach the unjargon API — {loadError}</>
-              ) : (
-                <>
-                  Waiting for agent messages… start a collector:
-                  <code className="mt-2 block text-sm text-neutral-400">
-                    unjargond replay fixtures/session.jsonl
-                  </code>
-                </>
+      {view === "board" ? (
+        <>
+          <div className="flex-1 overflow-y-auto px-4 py-6">
+            <div className="mx-auto max-w-2xl">
+              {terms.length === 0 && (
+                <p className="mt-24 text-center text-neutral-500">
+                  {!loaded ? (
+                    "loading…"
+                  ) : loadError ? (
+                    <>couldn&apos;t reach the unjargon API — {loadError}</>
+                  ) : (
+                    <>
+                      No terms yet — as your agents work, the jargon they use
+                      lands here, already explained.
+                      <code className="mt-2 block text-sm text-neutral-400">
+                        unjargond replay fixtures/session.jsonl
+                      </code>
+                    </>
+                  )}
+                </p>
               )}
-            </p>
-          )}
-          {digests.map((d) => (
-            <DigestCard
-              key={`d${d.id}`}
-              digest={d}
-              termsById={termsById}
-              showOriginal={showOriginals}
-              onTermExpanded={cacheExpansion}
-            />
-          ))}
-          {messages
-            .filter(
-              (m) =>
-                !highlights ||
-                (m.translated &&
-                  m.subtitle !== null &&
-                  (m.importance ?? 0) >= HIGHLIGHT_THRESHOLD),
-            )
-            .map((m) => (
-              <MessageRow
-                key={m.id}
-                message={m}
-                termsById={termsById}
-                showOriginal={showOriginals}
-                onTermExpanded={cacheExpansion}
+              <ChipBoard
+                terms={terms}
+                freshTermIds={freshTermIds}
+                onExpanded={cacheExpansion}
+                onLearned={markLearned}
               />
-            ))}
-          <div ref={bottomRef} />
-        </div>
-      </div>
+            </div>
+          </div>
+          <LatestStrip message={latest} onOpenStream={() => setView("stream")} />
+        </>
+      ) : (
+        <>
+          <div
+            ref={scrollerRef}
+            onScroll={onScroll}
+            className="flex-1 overflow-y-auto px-4 py-6"
+          >
+            <div className="mx-auto flex max-w-2xl flex-col gap-7">
+              {messages.length === 0 && digests.length === 0 && (
+                <p className="mt-24 text-center text-neutral-500">
+                  {!loaded ? (
+                    "loading…"
+                  ) : loadError ? (
+                    <>couldn&apos;t reach the unjargon API — {loadError}</>
+                  ) : (
+                    <>
+                      Waiting for agent messages… start a collector:
+                      <code className="mt-2 block text-sm text-neutral-400">
+                        unjargond replay fixtures/session.jsonl
+                      </code>
+                    </>
+                  )}
+                </p>
+              )}
+              {digests.map((d) => (
+                <DigestCard
+                  key={`d${d.id}`}
+                  digest={d}
+                  termsById={termsById}
+                  showOriginal={showOriginals}
+                  onTermExpanded={cacheExpansion}
+                  onTermLearned={markLearned}
+                />
+              ))}
+              {messages
+                .filter(
+                  (m) =>
+                    !highlights ||
+                    (m.translated &&
+                      m.subtitle !== null &&
+                      (m.importance ?? 0) >= HIGHLIGHT_THRESHOLD),
+                )
+                .map((m) => (
+                  <MessageRow
+                    key={m.id}
+                    message={m}
+                    termsById={termsById}
+                    showOriginal={showOriginals}
+                    onTermExpanded={cacheExpansion}
+                    onTermLearned={markLearned}
+                  />
+                ))}
+              <div ref={bottomRef} />
+            </div>
+          </div>
 
-      {domains.length > 0 && (
-        <footer className="flex items-center gap-2 overflow-x-auto border-t border-neutral-800 px-4 py-2 text-xs text-neutral-400">
-          {domains.map(([domain, count]) => (
-            <span
-              key={domain}
-              className="whitespace-nowrap rounded-full border border-neutral-700 px-2.5 py-1"
-            >
-              {domain} · {count}
-            </span>
-          ))}
-          <span className="ml-auto whitespace-nowrap pl-2 text-neutral-500">
-            {terms.length} terms
-          </span>
-        </footer>
+          {domains.length > 0 && (
+            <footer className="flex items-center gap-2 overflow-x-auto border-t border-neutral-800 px-4 py-2 text-xs text-neutral-400">
+              {domains.map(([domain, count]) => (
+                <span
+                  key={domain}
+                  className="whitespace-nowrap rounded-full border border-neutral-700 px-2.5 py-1"
+                >
+                  {domain} · {count}
+                </span>
+              ))}
+              <span className="ml-auto whitespace-nowrap pl-2 text-neutral-500">
+                {terms.length} terms
+              </span>
+            </footer>
+          )}
+        </>
       )}
 
     </main>
@@ -389,11 +489,13 @@ function DigestCard({
   termsById,
   showOriginal,
   onTermExpanded,
+  onTermLearned,
 }: {
   digest: LiveDigest;
   termsById: Map<number, LiveTerm>;
   showOriginal: boolean;
   onTermExpanded: (termId: number, l2: string, l3: string) => void;
+  onTermLearned: (termId: number) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
   const [inner, setInner] = useState<LiveMessage[] | null>(null);
@@ -437,6 +539,7 @@ function DigestCard({
               termsById={termsById}
               showOriginal={showOriginal}
               onTermExpanded={onTermExpanded}
+              onTermLearned={onTermLearned}
             />
           ))}
         </div>
@@ -452,11 +555,13 @@ function MessageRow({
   termsById,
   showOriginal,
   onTermExpanded,
+  onTermLearned,
 }: {
   message: LiveMessage;
   termsById: Map<number, LiveTerm>;
   showOriginal: boolean;
   onTermExpanded: (termId: number, l2: string, l3: string) => void;
+  onTermLearned: (termId: number) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
   const [activeTermId, setActiveTermId] = useState<number | null>(null);
@@ -506,6 +611,7 @@ function MessageRow({
           messageId={m.id}
           onClose={() => setActiveTermId(null)}
           onExpanded={onTermExpanded}
+          onLearned={onTermLearned}
         />
       )}
     </>
@@ -579,11 +685,13 @@ function InlineTermCard({
   messageId,
   onClose,
   onExpanded,
+  onLearned,
 }: {
   term: LiveTerm;
-  messageId: number;
+  messageId?: number; // omitted → L3 grounds in the term's latest sighting
   onClose: () => void;
   onExpanded: (termId: number, l2: string, l3: string) => void;
+  onLearned: (termId: number) => void;
 }) {
   const [open, setOpen] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -594,6 +702,7 @@ function InlineTermCard({
     const next = !open;
     setOpen(next);
     setError(null);
+    if (next) onLearned(term.id);
     if (next && !hasLong && !loading) {
       setLoading(true);
       try {
@@ -753,5 +862,133 @@ function AnnotatedOriginal({
         </div>
       )}
     </div>
+  );
+}
+
+// The primary surface: every picked keyword/initial/domain term, grouped by
+// domain, freshest domains first. Bright = not yet opened; dimmed = learned.
+// Tap a chip → collapsed card (term + one-liner); open → long in-context
+// explanation grounded in the term's latest sighting.
+function ChipBoard({
+  terms,
+  freshTermIds,
+  onExpanded,
+  onLearned,
+}: {
+  terms: LiveTerm[];
+  freshTermIds: Set<number>;
+  onExpanded: (termId: number, l2: string, l3: string) => void;
+  onLearned: (termId: number) => void;
+}) {
+  const [activeTermId, setActiveTermId] = useState<number | null>(null);
+
+  const groups = useMemo(() => {
+    const byDomain = new Map<string, LiveTerm[]>();
+    for (const t of terms) {
+      byDomain.set(t.domain, [...(byDomain.get(t.domain) ?? []), t]);
+    }
+    const out = [...byDomain.entries()].map(([domain, list]) => {
+      list.sort(
+        (a, b) =>
+          b.lastSeenAt.localeCompare(a.lastSeenAt) ||
+          (b.salience ?? 0) - (a.salience ?? 0),
+      );
+      return { domain, list, newest: list[0].lastSeenAt };
+    });
+    out.sort((a, b) => b.newest.localeCompare(a.newest));
+    return out;
+  }, [terms]);
+
+  const active =
+    activeTermId !== null
+      ? (terms.find((t) => t.id === activeTermId) ?? null)
+      : null;
+
+  return (
+    <div className="flex flex-col gap-6">
+      {groups.map(({ domain, list }) => {
+        const fresh = list.filter(
+          (t) => freshTermIds.has(t.id) && !t.learnedAt,
+        ).length;
+        return (
+          <section key={domain}>
+            <h2 className="mb-2 text-xs font-semibold uppercase tracking-widest text-neutral-500">
+              {domain}
+              {fresh > 0 && (
+                <span className="ml-2 rounded-full bg-amber-300/15 px-1.5 py-0.5 font-normal normal-case tracking-normal text-amber-200">
+                  {fresh} new
+                </span>
+              )}
+            </h2>
+            <div className="flex flex-wrap gap-2">
+              {list.map((t) => (
+                <button
+                  key={t.id}
+                  onClick={() =>
+                    setActiveTermId((cur) => (cur === t.id ? null : t.id))
+                  }
+                  className={`rounded-full border px-3 py-1.5 text-sm transition-colors ${
+                    activeTermId === t.id
+                      ? "border-amber-300/60 bg-amber-300/20 text-amber-100"
+                      : t.learnedAt
+                        ? "border-neutral-800 text-neutral-500 hover:border-neutral-600 hover:text-neutral-300"
+                        : "border-amber-300/30 bg-amber-300/5 text-amber-100/90 hover:bg-amber-300/15"
+                  }`}
+                >
+                  {t.term}
+                  {freshTermIds.has(t.id) && !t.learnedAt && (
+                    <span className="ml-1.5 inline-block h-1.5 w-1.5 rounded-full bg-amber-300 align-middle" />
+                  )}
+                </button>
+              ))}
+            </div>
+            {active && active.domain === domain && (
+              <InlineTermCard
+                key={active.id}
+                term={active}
+                onClose={() => setActiveTermId(null)}
+                onExpanded={onExpanded}
+                onLearned={onLearned}
+              />
+            )}
+          </section>
+        );
+      })}
+    </div>
+  );
+}
+
+// Glanceable agent status — the one place the stream surfaces on the board.
+function LatestStrip({
+  message: m,
+  onOpenStream,
+}: {
+  message: LiveMessage | undefined;
+  onOpenStream: () => void;
+}) {
+  if (!m) return null;
+  return (
+    <button
+      onClick={onOpenStream}
+      className="flex items-center gap-3 border-t border-neutral-800 px-4 py-2.5 text-left hover:bg-neutral-900/60"
+      title="open the full stream"
+    >
+      <time className="shrink-0 font-mono text-xs text-neutral-500">
+        {timeOf(m.ts)}
+      </time>
+      {!m.translated ? (
+        <span className="flex min-w-0 items-center gap-2 text-sm text-neutral-500">
+          <span className="truncate">{m.text}</span>
+          <TypingDots />
+        </span>
+      ) : (
+        <span className="min-w-0 truncate text-sm text-neutral-400">
+          {m.subtitle ?? m.text}
+        </span>
+      )}
+      <span className="ml-auto shrink-0 text-xs text-neutral-500">
+        stream ▸
+      </span>
+    </button>
   );
 }

@@ -1,4 +1,4 @@
-import { desc, eq, inArray, ne } from "drizzle-orm";
+import { desc, eq, inArray, max, ne } from "drizzle-orm";
 import { db, tables } from "@/db";
 import { getCalibration } from "@/lib/settings";
 
@@ -73,7 +73,30 @@ export async function GET() {
     annotationsByMessage.set(a.messageId, list);
   }
 
-  const termRows = await db.select().from(tables.terms);
+  // Terms with recency (latest sighting) — the chip board sorts by it.
+  const termRows = await db
+    .select({
+      id: tables.terms.id,
+      term: tables.terms.term,
+      domain: tables.terms.domain,
+      l1: tables.terms.l1,
+      l2: tables.terms.l2,
+      l3: tables.terms.l3,
+      salience: tables.terms.salience,
+      learnedAt: tables.terms.learnedAt,
+      createdAt: tables.terms.createdAt,
+      lastSeenAt: max(tables.messages.ts),
+    })
+    .from(tables.terms)
+    .leftJoin(
+      tables.termSightings,
+      eq(tables.termSightings.termId, tables.terms.id),
+    )
+    .leftJoin(
+      tables.messages,
+      eq(tables.messages.id, tables.termSightings.messageId),
+    )
+    .groupBy(tables.terms.id);
 
   return Response.json({
     calibration: await getCalibration(),
@@ -95,6 +118,8 @@ export async function GET() {
       l2: t.l2,
       l3: t.l3,
       salience: t.salience,
+      learnedAt: t.learnedAt?.toISOString() ?? null,
+      lastSeenAt: (t.lastSeenAt ?? t.createdAt).toISOString(),
     })),
     messages: uncovered.reverse().map((r) => ({
       id: r.id,
