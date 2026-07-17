@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { api, apiBase, apiBaseIsBuiltIn, setApiBase } from "@/lib/api";
+import AccountMenu from "@/app/account-menu";
 
 export type LiveAnnotation = {
   id: number;
@@ -477,6 +478,7 @@ export default function LiveStream() {
           >
             wiki
           </Link>
+          <AccountMenu />
           {view === "stream" && (
             <>
               <button

@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { api } from "@/lib/api";
+import AccountMenu from "@/app/account-menu";
 
 export type WikiTerm = {
   id: number;
@@ -69,11 +70,12 @@ export default function Wiki() {
           ← live
         </Link>
         <span className="font-semibold tracking-tight">unjargon wiki</span>
+        <AccountMenu />
         <input
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           placeholder="search terms…"
-          className="ml-auto w-40 rounded-md border border-neutral-700 bg-neutral-900 px-2 py-1 text-sm outline-none placeholder:text-neutral-600 focus:border-neutral-500 sm:w-64"
+          className="w-40 rounded-md border border-neutral-700 bg-neutral-900 px-2 py-1 text-sm outline-none placeholder:text-neutral-600 focus:border-neutral-500 sm:w-64"
         />
       </header>
 

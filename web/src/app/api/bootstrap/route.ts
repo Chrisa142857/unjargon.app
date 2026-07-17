@@ -1,6 +1,5 @@
 import { and, desc, eq, inArray, max, ne } from "drizzle-orm";
 import { db, tables } from "@/db";
-import { getCalibration } from "@/lib/settings";
 import { requireUser } from "@/lib/auth";
 
 export const dynamic = "force-dynamic";
@@ -110,7 +109,7 @@ export async function GET(req: Request) {
     .groupBy(tables.terms.id, tables.userTerms.l3, tables.userTerms.learnedAt);
 
   return Response.json({
-    calibration: await getCalibration(),
+    calibration: user.calibration,
     digests: digests.map((d) => ({
       id: d.id,
       sessionId: d.sessionId,

@@ -27,6 +27,15 @@ export async function getCalibration(): Promise<CalibrationLevel> {
   return value;
 }
 
+export async function getUserCalibration(userId: number): Promise<CalibrationLevel> {
+  const [user] = await db.select({ calibration: tables.users.calibration }).from(tables.users).where(eq(tables.users.id, userId));
+  return isCalibrationLevel(user?.calibration) ? user.calibration : "new";
+}
+
+export async function setUserCalibration(userId: number, value: CalibrationLevel): Promise<void> {
+  await db.update(tables.users).set({ calibration: value }).where(eq(tables.users.id, userId));
+}
+
 export async function setCalibration(value: CalibrationLevel): Promise<void> {
   await db
     .insert(tables.settings)

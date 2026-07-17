@@ -1,16 +1,21 @@
 import {
-  getCalibration,
+  getUserCalibration,
   isCalibrationLevel,
-  setCalibration,
+  setUserCalibration,
 } from "@/lib/settings";
+import { requireUser } from "@/lib/auth";
 
 export const dynamic = "force-dynamic";
 
-export async function GET() {
-  return Response.json({ calibration: await getCalibration() });
+export async function GET(req: Request) {
+  const user = await requireUser(req);
+  if (user instanceof Response) return user;
+  return Response.json({ calibration: await getUserCalibration(user.id) });
 }
 
 export async function POST(req: Request) {
+  const user = await requireUser(req);
+  if (user instanceof Response) return user;
   let body: { calibration?: unknown };
   try {
     body = await req.json();
@@ -23,6 +28,6 @@ export async function POST(req: Request) {
       { status: 400 },
     );
   }
-  await setCalibration(body.calibration);
+  await setUserCalibration(user.id, body.calibration);
   return Response.json({ calibration: body.calibration });
 }
