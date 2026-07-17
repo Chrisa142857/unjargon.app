@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
-import { api } from "@/lib/api";
+import { api, apiBase, apiBaseIsBuiltIn, setApiBase } from "@/lib/api";
 
 export type LiveAnnotation = {
   id: number;
@@ -487,11 +487,14 @@ export default function LiveStream() {
           <div className="relative z-10 flex-1 overflow-y-auto px-4 py-6">
             <div className="mx-auto max-w-2xl">
               {terms.length === 0 && (
-                <p className="mt-24 text-center text-neutral-500">
+                <div className="mt-24 text-center text-neutral-500">
                   {!loaded ? (
                     "loading…"
                   ) : loadError ? (
-                    <>couldn&apos;t reach the unjargon API — {loadError}</>
+                    <>
+                      <p>couldn&apos;t reach the unjargon API — {loadError}</p>
+                      <BackendPrompt />
+                    </>
                   ) : (
                     <>
                       No terms yet — as your agents work, the jargon they use
@@ -501,7 +504,7 @@ export default function LiveStream() {
                       </code>
                     </>
                   )}
-                </p>
+                </div>
               )}
               <ChipBoard
                 terms={terms}
@@ -1385,5 +1388,35 @@ function LatestStrip({
         stream ▸
       </span>
     </button>
+  );
+}
+
+// Static deployments (GitHub Pages) may not have a backend baked in at build
+// time — let the user point this browser at their unjargon server (e.g. a
+// Hugging Face Space) without rebuilding.
+function BackendPrompt() {
+  const [url, setUrl] = useState(apiBase());
+  if (apiBaseIsBuiltIn()) return null;
+  return (
+    <form
+      onSubmit={(e) => {
+        e.preventDefault();
+        setApiBase(url);
+      }}
+      className="mx-auto mt-6 flex max-w-md items-center gap-2"
+    >
+      <input
+        value={url}
+        onChange={(e) => setUrl(e.target.value)}
+        placeholder="https://your-space.hf.space"
+        className="min-w-0 flex-1 rounded-md border border-neutral-700 bg-neutral-900 px-3 py-2 text-sm text-neutral-100 outline-none placeholder:text-neutral-600 focus:border-neutral-500"
+      />
+      <button
+        type="submit"
+        className="shrink-0 rounded-md border border-amber-300/40 bg-amber-300/10 px-3 py-2 text-sm text-amber-100 hover:bg-amber-300/20"
+      >
+        connect
+      </button>
+    </form>
   );
 }

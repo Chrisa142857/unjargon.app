@@ -12,7 +12,10 @@
 set -eu
 cd "$(dirname "$0")/.."
 
-: "${NEXT_PUBLIC_API_BASE:?set NEXT_PUBLIC_API_BASE to the backend URL (the HF Space)}"
+if [ -z "${NEXT_PUBLIC_API_BASE:-}" ]; then
+  echo "NEXT_PUBLIC_API_BASE not set — the deployed site will ask the user for"
+  echo "a backend URL at runtime (settable from the /live error state)."
+fi
 
 restore() { [ -d src/app/_api_disabled ] && mv src/app/_api_disabled src/app/api || true; }
 trap restore EXIT
@@ -23,4 +26,4 @@ BUILD_TARGET=pages npx next build
 # GitHub Pages serves 404.html for unknown paths; Next emits one already.
 touch out/.nojekyll
 
-echo "static export in web/out (API base: $NEXT_PUBLIC_API_BASE, base path: ${NEXT_PUBLIC_BASE_PATH:-/})"
+echo "static export in web/out (API base: ${NEXT_PUBLIC_API_BASE:-runtime-configurable}, base path: ${NEXT_PUBLIC_BASE_PATH:-/})"
