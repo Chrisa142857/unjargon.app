@@ -71,9 +71,10 @@ Definition of demo-done: two collectors (Mac laptop + Linux VM) feeding one `/li
   `.github/workflows/pages.yml`. The `/live` empty state shows a centered,
   copy-paste collector install command. Do not re-add a persistent top banner;
   it was intentionally removed.
-- **Installer:** `install.sh` is served from GitHub raw content, asks for the
-  ingest credential through `/dev/tty` (so it is not embedded in the webpage
-  or shell command), and downloads binaries from GitHub Releases:
+- **Installer:** `install.sh` is served from GitHub raw content and downloads
+  binaries from GitHub Releases. It currently prompts for the legacy demo
+  ingest credential. This is not a user-onboarding flow; replace it with the
+  device-pairing flow in section 10 before inviting users:
 
   ```sh
   curl -fsSL https://raw.githubusercontent.com/Chrisa142857/unjargon.app/main/install.sh \
@@ -101,30 +102,33 @@ product:
 - Render's dashboard is only for the owner's infrastructure administration;
   it must not be the customer/admin interface for the application.
 
-**Never expose the Render `INGEST_TOKEN` in browser code or copy-paste UI.**
-It is only an interim owner/demo credential. Do not onboard unrelated users
-with it.
+**Do not involve the Render `INGEST_TOKEN` in user onboarding.** It is a
+temporary owner/demo implementation detail, not a customer credential.
 
-## 10. Recommended next milestone: hosted multi-user service
+## 10. Minimum hosted-user migration (do this, skip the rest)
 
-Make the single Render backend a proper multi-tenant service before public
-onboarding:
+Render is owner-managed infrastructure. Users need ordinary individual
+accounts; do not add workspaces, memberships, or app-level admin roles until
+the product actually needs shared teams.
 
-1. Add email magic-link/passkey authentication (an identity provider is fine),
-   plus `users`, `workspaces`, and `memberships` with an application-level
-   `admin` role.
-2. Add `workspace_id` to devices, sessions, messages, digests, annotations,
-   terms/sightings, and settings. Scope and authorize every API read/write by
-   workspace.
-3. Replace the global ingest secret with a short-lived browser-to-device
-   pairing code and a per-device hashed, revocable credential. The installer
-   should exchange the pairing code locally; users never see a Render secret.
-4. Keep raw transcripts, subtitles, project paths, session-specific L3
-   explanations, and sightings private to a workspace. A global glossary cache
-   may reuse only generic canonical L1/L2 definitions; never reuse source text
-   or "why this matters in this project" context across users.
-5. Use managed external Postgres before relying on the service for user data;
-   the bundled Render Postgres path is ephemeral.
+1. Move to managed Postgres first. Do not put registered-user data in the
+   bundled ephemeral database.
+2. Add email magic-link authentication and a minimal `users` table. Add only
+   `devices.user_id`; sessions/messages already reach a user through their
+   device, so do not stamp `user_id` on every table. Make device names unique
+   per user, and filter every read through the device owner.
+3. After browser sign-in, create a short-lived pairing code. The installer
+   exchanges it once for a hashed, revocable **per-device credential**. The
+   collector uses that credential for ingest; no Render secret is shown to or
+   copied by a user.
+4. Keep the glossary global only where it is genuinely generic: canonical
+   term + L1/L2. Store learned state and L3 (the session-specific explanation)
+   per user. Never place raw transcripts, filenames, project paths, or message
+   annotations in the shared cache.
+
+Add teams/workspaces, customer-facing admin screens, and provider OAuth only
+when a real customer requires them. The owner manages deployment, logs, and
+environment in Render's web UI.
 
 Signing in with a Claude/Codex-associated identity does **not** authorize a
 web service to read local histories. The right UX is: sign in → pair this
