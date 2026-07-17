@@ -162,6 +162,14 @@ function dayLabelOf(ts: string): string {
   });
 }
 
+// Compact axis label: "today" / "yest" / "Jul 13".
+function shortDay(day: string): string {
+  if (day === "today") return "today";
+  if (day === "yesterday") return "yest";
+  const parts = day.split(", ");
+  return parts.length > 1 ? parts.slice(1).join(" ") : day;
+}
+
 function projectOf(cwd: string | null) {
   if (!cwd) return null;
   return cwd.split("/").filter(Boolean).pop() ?? null;
@@ -1046,6 +1054,36 @@ function ChipBoard({
     });
   }, [byTime]);
 
+  // The time axis: one entry per day on the wall; tapping jumps to that
+  // day's divider, and the section currently in view is highlighted.
+  const days = useMemo(
+    () => timeRows.filter((r) => r.divider).map((r) => r.day),
+    [timeRows],
+  );
+  const dividerRefs = useRef<Map<string, HTMLDivElement>>(new Map());
+  // During a tap-to-jump smooth scroll, intermediate dividers cross the
+  // observer band; ignore them so the tapped day keeps the highlight.
+  const suppressObserverUntil = useRef(0);
+  const [currentDay, setCurrentDay] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (sort !== "time" || days.length < 2) return;
+    const io = new IntersectionObserver(
+      (entries) => {
+        if (Date.now() < suppressObserverUntil.current) return;
+        for (const e of entries) {
+          if (e.isIntersecting) {
+            setCurrentDay((e.target as HTMLElement).dataset.day ?? null);
+          }
+        }
+      },
+      // A divider counts as "current" while it sits in the top quarter.
+      { rootMargin: "0px 0px -75% 0px" },
+    );
+    dividerRefs.current.forEach((el) => io.observe(el));
+    return () => io.disconnect();
+  }, [sort, days]);
+
   const card = (t: LiveTerm) => (
     <div className="col-span-2">
       <InlineTermCard
@@ -1149,14 +1187,50 @@ function ChipBoard({
 
   if (sort === "time") {
     const learned = byTime.filter((t) => t.learnedAt);
+    const showAxis = days.length > 1;
     return (
-      <div>
+      <div className={showAxis ? "pr-9" : ""}>
+        {showAxis && (
+          <nav
+            aria-label="jump to a day"
+            className="fixed right-1.5 top-1/2 z-20 flex max-h-[70vh] -translate-y-1/2 flex-col items-stretch gap-0.5 overflow-y-auto rounded-xl border border-white/[0.06] bg-neutral-900/80 px-1 py-1.5 backdrop-blur"
+          >
+            {days.map((d) => (
+              <button
+                key={d}
+                onClick={() => {
+                  // Optimistic: the bottom-most day may not reach the top
+                  // band, so the observer alone would never highlight it.
+                  suppressObserverUntil.current = Date.now() + 1000;
+                  setCurrentDay(d);
+                  dividerRefs.current
+                    .get(d)
+                    ?.scrollIntoView({ behavior: "smooth", block: "start" });
+                }}
+                className={`rounded-md px-1.5 py-1 text-right text-[9px] uppercase leading-tight tracking-wide transition-colors ${
+                  currentDay === d
+                    ? "bg-neutral-800 font-semibold text-amber-200"
+                    : "text-neutral-500 hover:text-neutral-200"
+                }`}
+              >
+                {shortDay(d)}
+              </button>
+            ))}
+          </nav>
+        )}
         {header}
         <div className="grid grid-cols-2 gap-3">
           {timeRows.map(({ t, day, divider }, i) => (
             <Fragment key={t.id}>
               {divider && (
-                <div className="col-span-2 mt-1 flex items-center gap-3 text-[10px] font-medium uppercase tracking-[0.14em] text-neutral-500 first:mt-0">
+                <div
+                  data-day={day}
+                  ref={(el) => {
+                    if (el) dividerRefs.current.set(day, el);
+                    else dividerRefs.current.delete(day);
+                  }}
+                  className="col-span-2 mt-1 flex scroll-mt-2 items-center gap-3 text-[10px] font-medium uppercase tracking-[0.14em] text-neutral-500 first:mt-0"
+                >
                   {day}
                   <span className="h-px flex-1 bg-white/5" />
                 </div>
