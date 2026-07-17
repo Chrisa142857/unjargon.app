@@ -1,0 +1,27 @@
+# On-demand health probe of the deployed backend, run from GitHub's runners
+# (the dev sandbox can't reach onrender.com directly). Retries through
+# Render's free-tier cold start (~1 min).
+name: Check backend health
+on:
+  workflow_dispatch:
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Probe backend
+        env:
+          URL: ${{ vars.UNJARGON_API_BASE || 'https://unjargon.onrender.com' }}
+        run: |
+          echo "checking $URL"
+          code=000
+          for i in $(seq 1 10); do
+            code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 30 "$URL/live" || echo 000)
+            echo "attempt $i: GET /live → $code"
+            [ "$code" = "200" ] && break
+            sleep 15
+          done
+          echo "--- /api/bootstrap body (first 300 bytes) ---"
+          curl -s --max-time 30 "$URL/api/bootstrap" | head -c 300; echo
+          echo "--- CORS headers ---"
+          curl -s -D - -o /dev/null --max-time 30 "$URL/api/bootstrap" | grep -i access-control || echo "(none)"
+          [ "$code" = "200" ]

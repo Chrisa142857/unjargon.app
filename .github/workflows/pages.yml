@@ -54,7 +54,8 @@ jobs:
             sub=$(echo "$SPACE" | tr '[:upper:]' '[:lower:]' | tr '/_.' '---')
             echo "base=https://${sub}.hf.space" >> "$GITHUB_OUTPUT"
           else
-            echo "base=" >> "$GITHUB_OUTPUT"
+            # the deployed Render service (repo variables above override this)
+            echo "base=https://unjargon.onrender.com" >> "$GITHUB_OUTPUT"
           fi
       - name: Build static export
         working-directory: web
