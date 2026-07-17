@@ -20,18 +20,18 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends postgresql postgresql-client \
     && rm -rf /var/lib/apt/lists/*
 
-# HF Spaces run the container as uid 1000 — which suits Postgres, since it
-# refuses to run as root anyway.
-RUN useradd -m -u 1000 user
-USER user
-ENV HOME=/home/user
+# Run as the node image's built-in non-root user (uid 1000 — required by HF
+# Spaces, and Postgres refuses to run as root anyway). node:*-slim already
+# defines it, so creating another uid-1000 user would fail the build.
+USER node
+ENV HOME=/home/node
 WORKDIR /app
 
-COPY --chown=user --from=builder /app/.next/standalone ./
-COPY --chown=user --from=builder /app/.next/static ./.next/static
-COPY --chown=user --from=builder /app/public ./public
-COPY --chown=user web/drizzle ./drizzle
-COPY --chown=user deploy/space-entrypoint.sh ./space-entrypoint.sh
+COPY --chown=node:node --from=builder /app/.next/standalone ./
+COPY --chown=node:node --from=builder /app/.next/static ./.next/static
+COPY --chown=node:node --from=builder /app/public ./public
+COPY --chown=node:node web/drizzle ./drizzle
+COPY --chown=node:node deploy/space-entrypoint.sh ./space-entrypoint.sh
 
 ENV NEXT_TELEMETRY_DISABLED=1 \
     PORT=7860 \
