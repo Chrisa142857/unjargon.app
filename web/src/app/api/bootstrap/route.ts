@@ -1,4 +1,4 @@
-import { and, desc, eq, inArray, max, ne } from "drizzle-orm";
+import { and, count, countDistinct, desc, eq, inArray, max, min, ne } from "drizzle-orm";
 import { db, tables } from "@/db";
 import { requireUser } from "@/lib/auth";
 
@@ -22,6 +22,21 @@ export async function GET(req: Request) {
     .orderBy(desc(tables.digests.id))
     .limit(200);
   const digests = digestRows.map((r) => r.digests).reverse();
+
+  // A collector cannot know a stable total while its agent keeps writing, so
+  // expose the records actually received instead of manufacturing a percentage.
+  const [progress] = await db
+    .select({
+      messages: count(tables.messages.id),
+      sessions: countDistinct(tables.sessions.id),
+      firstMessageAt: min(tables.messages.ts),
+      lastMessageAt: max(tables.messages.ts),
+      lastImportedAt: max(tables.messages.createdAt),
+    })
+    .from(tables.messages)
+    .innerJoin(tables.sessions, eq(tables.messages.sessionId, tables.sessions.id))
+    .innerJoin(tables.devices, eq(tables.sessions.deviceId, tables.devices.id))
+    .where(eq(tables.devices.userId, user.id));
 
   // Per session, everything up to the newest digest is covered.
   const coveredTo = new Map<number, number>();
@@ -110,6 +125,13 @@ export async function GET(req: Request) {
 
   return Response.json({
     calibration: user.calibration,
+    progress: {
+      messages: Number(progress.messages),
+      sessions: Number(progress.sessions),
+      firstMessageAt: progress.firstMessageAt?.toISOString() ?? null,
+      lastMessageAt: progress.lastMessageAt?.toISOString() ?? null,
+      lastImportedAt: progress.lastImportedAt?.toISOString() ?? null,
+    },
     digests: digests.map((d) => ({
       id: d.id,
       sessionId: d.sessionId,

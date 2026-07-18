@@ -51,6 +51,14 @@ export type LiveDigest = {
   summary: string;
 };
 
+type ImportProgress = {
+  messages: number;
+  sessions: number;
+  firstMessageAt: string | null;
+  lastMessageAt: string | null;
+  lastImportedAt: string | null;
+};
+
 const HIGHLIGHT_THRESHOLD = 0.7;
 const INSTALL_COMMAND =
   "curl -fsSL https://raw.githubusercontent.com/Chrisa142857/unjargon.app/main/install.sh | sh -s -- --server https://unjargon.onrender.com";
@@ -217,6 +225,39 @@ function InstallCollectorCallout() {
   );
 }
 
+function ImportProgressCard({ progress }: { progress: ImportProgress }) {
+  const [receiving, setReceiving] = useState(false);
+  useEffect(() => {
+    const refresh = () => setReceiving(
+      progress.lastImportedAt !== null &&
+      Date.now() - Date.parse(progress.lastImportedAt) < 60_000,
+    );
+    refresh();
+    const timer = window.setInterval(refresh, 10_000);
+    return () => window.clearInterval(timer);
+  }, [progress.lastImportedAt]);
+  if (!receiving || progress.messages === 0) return null;
+  const range = progress.firstMessageAt && progress.lastMessageAt
+    ? `${dayLabelOf(progress.firstMessageAt)} → ${dayLabelOf(progress.lastMessageAt)}`
+    : null;
+
+  return (
+    <section aria-live="polite" className="mb-6 rounded-xl border border-sky-200/20 bg-sky-300/[0.06] p-5 text-left shadow-[0_0_45px_rgba(125,211,252,0.05)]">
+      <div className="flex items-center gap-2 text-sm font-medium text-sky-100">
+        <span className="relative flex h-2.5 w-2.5"><span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-sky-300/60" /><span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-sky-300" /></span>
+        Importing existing agent history
+      </div>
+      <div className="mt-4 h-1.5 overflow-hidden rounded-full bg-sky-100/10"><div className="h-full w-1/3 animate-pulse rounded-full bg-sky-300" /></div>
+      <div className="mt-4 flex flex-wrap gap-x-5 gap-y-1 text-sm text-neutral-300">
+        <span><strong className="text-white">{progress.messages.toLocaleString()}</strong> updates received</span>
+        <span><strong className="text-white">{progress.sessions.toLocaleString()}</strong> sessions found</span>
+        {range && <span>{range}</span>}
+      </div>
+      <p className="mt-3 text-xs text-neutral-500">Receiving now. The total grows as Claude Code and Codex transcript files are scanned.</p>
+    </section>
+  );
+}
+
 // /live, chips first. The primary surface is the term board: picked
 // keywords/initials/domain terms grouped by domain, bright until opened —
 // what the agent's work is teaching you, not what the agent said. A slim
@@ -237,6 +278,7 @@ export default function LiveStream() {
   const [pinned, setPinned] = useState(true);
   const [showOriginals, setShowOriginals] = useState(false);
   const [calibration, setCalibration] = useState<Calibration>("new");
+  const [progress, setProgress] = useState<ImportProgress>({ messages: 0, sessions: 0, firstMessageAt: null, lastMessageAt: null, lastImportedAt: null });
 
   useEffect(() => {
     let cancelled = false;
@@ -271,6 +313,7 @@ export default function LiveStream() {
           return [...data.digests, ...live.filter((d) => !seen.has(d.id))];
         });
         setCalibration(data.calibration);
+        setProgress(data.progress);
       } catch (err) {
         if (!cancelled) setLoadError(String(err));
       } finally {
@@ -342,6 +385,12 @@ export default function LiveStream() {
         setMessages((prev) =>
           prev.some((p) => p.id === m.id) ? prev : [...prev, m],
         );
+        setProgress((p) => ({
+          ...p,
+          messages: p.messages + 1,
+          lastMessageAt: m.ts,
+          lastImportedAt: new Date().toISOString(),
+        }));
       } else if (event.type === "digest") {
         // A stretch of the stream just rolled up: swap those messages for the card.
         const d: LiveDigest = event.digest;
@@ -524,6 +573,7 @@ export default function LiveStream() {
         <>
           <div className="relative z-10 flex-1 overflow-y-auto px-4 py-6">
             <div className="mx-auto max-w-2xl">
+              <ImportProgressCard progress={progress} />
               {terms.length === 0 && (
                 <div className="text-center text-neutral-500">
                   {!loaded ? (
@@ -566,6 +616,7 @@ export default function LiveStream() {
             className="relative z-10 flex-1 overflow-y-auto px-4 py-6"
           >
             <div className="mx-auto flex max-w-2xl flex-col gap-7">
+              <ImportProgressCard progress={progress} />
               {messages.length === 0 && digests.length === 0 && (
                 <div className="mt-24 text-center text-neutral-500">
                   {!loaded ? (
