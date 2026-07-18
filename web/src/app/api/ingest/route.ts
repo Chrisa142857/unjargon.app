@@ -81,7 +81,7 @@ export async function POST(req: Request) {
 
   // Shared-glossary pass (no AI): terms other users already paid to extract
   // surface on this user's board immediately, even before any translation.
-  await recordKnownSightings(stored);
+  await recordKnownSightings(stored, userId);
 
   for (const row of stored) {
     publish({

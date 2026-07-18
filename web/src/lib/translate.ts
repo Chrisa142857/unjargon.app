@@ -1,5 +1,5 @@
 import Anthropic from "@anthropic-ai/sdk";
-import { and, asc, eq, inArray, isNull, lt } from "drizzle-orm";
+import { and, asc, eq, inArray, isNull, lt, or } from "drizzle-orm";
 import { db, tables } from "@/db";
 import { publish } from "@/lib/bus";
 import { scheduleDigestCheck, serverCanLLM } from "@/lib/digest";
@@ -272,9 +272,10 @@ async function callTranslator(
     .where(eq(tables.sessions.id, msg.sessionId));
   const projectName = session?.cwd?.split("/").filter(Boolean).pop() ?? null;
 
-  // Known terms for dedupe: exactly the shared-glossary terms present in
-  // this message (stays correct as the shared glossary grows past any cap).
-  const known = await termsInText(msg.text);
+  // Known terms for dedupe: exactly the glossary terms visible to this
+  // user that are present in this message (stays correct as the shared
+  // glossary grows past any cap; never leaks other users' keywords).
+  const known = await termsInText(msg.text, (await sessionUserId(msg.sessionId)) ?? 0);
 
   const client = new Anthropic();
   const resp = await client.messages.create({
@@ -308,6 +309,7 @@ async function storeResult(
   const now = new Date();
   const subtitle = result.skip ? null : (result.subtitle ?? null);
   const importance = result.skip ? 0 : (result.importance ?? 0.5);
+  const owner = await sessionUserId(msg.sessionId);
 
   await db
     .update(tables.messages)
@@ -318,21 +320,26 @@ async function storeResult(
   const newTerms: TranslationEventTerms = [];
 
   if (!result.skip) {
-    // Upsert terms (first-seen wins), record sightings.
+    // Upsert terms (first-seen wins), record sightings. Generic vocabulary
+    // is shared; "keyword" terms are project-specific and owned by this user
+    // (see glossary.ts privacy boundary) — uniqueness is per owner.
     const termIdByKey = new Map<string, number>();
     for (const t of result.terms ?? []) {
       const key = t.term.trim().toLowerCase();
+      const kind = t.kind ?? inferKind(t.term);
+      const termOwner = kind === "keyword" ? owner : null;
       const inserted = await db
         .insert(tables.terms)
         .values({
+          userId: termOwner,
           key,
           term: t.term.trim(),
           domain: t.domain,
-          kind: t.kind ?? inferKind(t.term),
+          kind,
           l1: t.level1,
           salience: t.salience,
         })
-        .onConflictDoNothing({ target: tables.terms.key })
+        .onConflictDoNothing() // terms_owner_key is an expression index — no target
         .returning();
       let row = inserted[0];
       const isNew = !!row;
@@ -340,7 +347,14 @@ async function storeResult(
         [row] = await db
           .select()
           .from(tables.terms)
-          .where(eq(tables.terms.key, key));
+          .where(
+            and(
+              eq(tables.terms.key, key),
+              termOwner === null
+                ? isNull(tables.terms.userId)
+                : eq(tables.terms.userId, termOwner),
+            ),
+          );
       }
       if (!row) continue;
       termIdByKey.set(key, row.id);
@@ -370,7 +384,15 @@ async function storeResult(
           const [existing] = await db
             .select({ id: tables.terms.id })
             .from(tables.terms)
-            .where(eq(tables.terms.key, refKey));
+            .where(
+              and(
+                eq(tables.terms.key, refKey),
+                or(
+                  isNull(tables.terms.userId),
+                  eq(tables.terms.userId, owner ?? 0),
+                ),
+              ),
+            );
           termId = existing?.id ?? null;
         }
       }
@@ -392,10 +414,9 @@ async function storeResult(
     }
   }
 
-  const userId = await sessionUserId(msg.sessionId);
-  if (!userId) return;
+  if (!owner) return;
   publish({
-    userId,
+    userId: owner,
     type: "translation",
     messageId: msg.id,
     sessionId: msg.sessionId,

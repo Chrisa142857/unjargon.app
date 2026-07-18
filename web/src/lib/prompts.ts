@@ -102,18 +102,53 @@ Agent message:
 }
 
 // --- Lazy term expansion (L2/L3, generated on first click, cached) --------
+//
+// Two SEPARATE calls by design — a privacy boundary, not a style choice.
+// L2 is cached on the shared term row and read by OTHER users, so its call
+// receives no transcript content at all (term/domain/L1 only). L3 is
+// per-user and grounded in that user's own source message.
 
-export function expansionSystemPrompt(level: CalibrationLevel): string {
+export function conceptSystemPrompt(level: CalibrationLevel): string {
   return `You are unjargon, a live glossary for users delegating work to AI agents. The user tapped a jargon term to go deeper. They are ${CALIBRATION_DESCRIPTIONS[level]}.
 
-Produce, via the emit_expansion tool:
-1. "level2" — the basic concept: 3-4 sentences with an everyday analogy, assuming no background in the domain.
-2. "level3" — why the agent is using this term in the user's actual session: ground it entirely in the provided source message and project; explain what the term means for THEIR work right now, so they can judge the agent's decision.
+Produce, via the emit_concept tool, "level2" — the basic concept: 3-4 sentences with an everyday analogy, assuming no background in the domain. This explanation is shared with other users of the glossary: keep it fully generic, about the term itself only.`;
+}
+
+export function conceptUserPrompt(input: {
+  term: string;
+  domain: string;
+  l1: string;
+}): string {
+  return `Term: ${input.term}
+Domain: ${input.domain}
+Existing one-liner (L1): ${input.l1}`;
+}
+
+export const conceptTool = {
+  name: "emit_concept",
+  description: "Emit the generic basic-concept layer for one glossary term.",
+  input_schema: {
+    type: "object" as const,
+    properties: {
+      level2: {
+        type: "string",
+        description:
+          "Basic concept: 3-4 sentences with an analogy, no assumed background, no user-specific context",
+      },
+    },
+    required: ["level2"],
+  },
+};
+
+export function groundingSystemPrompt(level: CalibrationLevel): string {
+  return `You are unjargon, a live glossary for users delegating work to AI agents. The user tapped a jargon term to go deeper. They are ${CALIBRATION_DESCRIPTIONS[level]}.
+
+Produce, via the emit_grounding tool, "level3" — why the agent is using this term in the user's actual session: ground it entirely in the provided source message and project; explain what the term means for THEIR work right now, so they can judge the agent's decision.
 
 Rules: never invent facts not supported by the source message; if the source message reports a failure or risk involving this term, say so plainly; keep numbers, outcomes, and file names verbatim.`;
 }
 
-export function expansionUserPrompt(input: {
+export function groundingUserPrompt(input: {
   term: string;
   domain: string;
   l1: string;
@@ -131,24 +166,20 @@ ${input.snippet}
 >>>`;
 }
 
-export const expansionTool = {
-  name: "emit_expansion",
-  description: "Emit the two deeper explanation layers for one glossary term.",
+export const groundingTool = {
+  name: "emit_grounding",
+  description:
+    "Emit the in-your-session explanation layer for one glossary term.",
   input_schema: {
     type: "object" as const,
     properties: {
-      level2: {
-        type: "string",
-        description:
-          "Basic concept: 3-4 sentences with an analogy, no assumed background",
-      },
       level3: {
         type: "string",
         description:
           "Why the agent is using it in this session, grounded in the source message",
       },
     },
-    required: ["level2", "level3"],
+    required: ["level3"],
   },
 };
 

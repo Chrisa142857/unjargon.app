@@ -3,15 +3,20 @@ import { and, desc, eq } from "drizzle-orm";
 import { db, tables } from "@/db";
 import {
   TRANSLATION_MODEL,
-  expansionSystemPrompt,
-  expansionTool,
-  expansionUserPrompt,
+  conceptSystemPrompt,
+  conceptTool,
+  conceptUserPrompt,
+  groundingSystemPrompt,
+  groundingTool,
+  groundingUserPrompt,
 } from "@/lib/prompts";
 import { getCalibration } from "@/lib/settings";
 
-// Lazy L2/L3 generation for a term, cached on the terms row. L3 is grounded
-// in a source message: the one the user tapped from when provided, else the
-// term's most recent sighting.
+// Lazy L2/L3 generation. Two separate calls — a privacy boundary: L2 is
+// cached on the (possibly shared) terms row, so its call never sees any
+// transcript content; L3 is per-user (user_terms), grounded in a source
+// message the user owns — the one they tapped from, else their most recent
+// sighting.
 
 const SNIPPET_MAX = 1200;
 
@@ -25,101 +30,146 @@ export async function expandTerm(
     .from(tables.terms)
     .where(eq(tables.terms.id, termId));
   if (!term) return null;
+  // Another user's private keyword: not visible, not expandable.
+  if (term.userId !== null && term.userId !== userId) return null;
   const [profile] = await db.select().from(tables.userTerms).where(and(eq(tables.userTerms.userId, userId), eq(tables.userTerms.termId, termId)));
   if (term.l2 && profile?.l3) {
     return { l2: term.l2, l3: profile.l3, cached: true };
   }
 
-  // Find the source message for grounding L3.
-  let source: { text: string; sessionId: number } | null = null;
-  if (sourceMessageId) {
-    const [m] = await db
-      .select({ text: tables.messages.text, sessionId: tables.messages.sessionId })
-      .from(tables.messages)
-      .innerJoin(tables.sessions, eq(tables.messages.sessionId, tables.sessions.id))
-      .innerJoin(tables.devices, eq(tables.sessions.deviceId, tables.devices.id))
-      .where(and(eq(tables.messages.id, sourceMessageId), eq(tables.devices.userId, userId)));
-    source = m ?? null;
-  }
-  if (!source) {
-    const [sighting] = await db
-      .select({ text: tables.messages.text, sessionId: tables.messages.sessionId })
-      .from(tables.termSightings)
-      .innerJoin(
-        tables.messages,
-        eq(tables.termSightings.messageId, tables.messages.id),
-      )
-      .innerJoin(tables.sessions, eq(tables.messages.sessionId, tables.sessions.id))
-      .innerJoin(tables.devices, eq(tables.sessions.deviceId, tables.devices.id))
-      .where(and(eq(tables.termSightings.termId, termId), eq(tables.devices.userId, userId)))
-      .orderBy(desc(tables.termSightings.id))
-      .limit(1);
-    source = sighting ?? null;
+  let l2 = term.l2;
+  if (!l2) {
+    l2 = await callConcept({ term: term.term, domain: term.domain, l1: term.l1 });
+    await db.update(tables.terms).set({ l2 }).where(eq(tables.terms.id, termId));
   }
 
-  let projectName: string | null = null;
-  if (source) {
-    const [session] = await db
-      .select({ cwd: tables.sessions.cwd })
-      .from(tables.sessions)
-      .where(eq(tables.sessions.id, source.sessionId));
-    projectName = session?.cwd?.split("/").filter(Boolean).pop() ?? null;
+  let l3 = profile?.l3 ?? null;
+  if (!l3) {
+    // Find the source message for grounding L3 (must belong to this user).
+    let source: { text: string; sessionId: number } | null = null;
+    if (sourceMessageId) {
+      const [m] = await db
+        .select({ text: tables.messages.text, sessionId: tables.messages.sessionId })
+        .from(tables.messages)
+        .innerJoin(tables.sessions, eq(tables.messages.sessionId, tables.sessions.id))
+        .innerJoin(tables.devices, eq(tables.sessions.deviceId, tables.devices.id))
+        .where(and(eq(tables.messages.id, sourceMessageId), eq(tables.devices.userId, userId)));
+      source = m ?? null;
+    }
+    if (!source) {
+      const [sighting] = await db
+        .select({ text: tables.messages.text, sessionId: tables.messages.sessionId })
+        .from(tables.termSightings)
+        .innerJoin(
+          tables.messages,
+          eq(tables.termSightings.messageId, tables.messages.id),
+        )
+        .innerJoin(tables.sessions, eq(tables.messages.sessionId, tables.sessions.id))
+        .innerJoin(tables.devices, eq(tables.sessions.deviceId, tables.devices.id))
+        .where(and(eq(tables.termSightings.termId, termId), eq(tables.devices.userId, userId)))
+        .orderBy(desc(tables.termSightings.id))
+        .limit(1);
+      source = sighting ?? null;
+    }
+
+    let projectName: string | null = null;
+    if (source) {
+      const [session] = await db
+        .select({ cwd: tables.sessions.cwd })
+        .from(tables.sessions)
+        .where(eq(tables.sessions.id, source.sessionId));
+      projectName = session?.cwd?.split("/").filter(Boolean).pop() ?? null;
+    }
+    const snippet = (source?.text ?? "(no source message recorded)").slice(0, SNIPPET_MAX);
+
+    l3 = await callGrounding({
+      term: term.term,
+      domain: term.domain,
+      l1: term.l1,
+      projectName,
+      snippet,
+    });
+    await db.insert(tables.userTerms).values({ userId, termId, l3 }).onConflictDoUpdate({ target: [tables.userTerms.userId, tables.userTerms.termId], set: { l3 } });
   }
-  const snippet = (source?.text ?? "(no source message recorded)").slice(0, SNIPPET_MAX);
 
-  const result = await callExpander({
-    term: term.term,
-    domain: term.domain,
-    l1: term.l1,
-    projectName,
-    snippet,
-  });
-
-  await db
-    .update(tables.terms)
-    .set({ l2: result.level2 })
-    .where(eq(tables.terms.id, termId));
-  await db.insert(tables.userTerms).values({ userId, termId, l3: result.level3 }).onConflictDoUpdate({ target: [tables.userTerms.userId, tables.userTerms.termId], set: { l3: result.level3 } });
-
-  return { l2: result.level2, l3: result.level3, cached: false };
+  return { l2, l3, cached: false };
 }
 
-async function callExpander(input: {
-  term: string;
-  domain: string;
-  l1: string;
-  projectName: string | null;
-  snippet: string;
-}): Promise<{ level2: string; level3: string }> {
-  if (process.env.UNJARGON_FAKE_TRANSLATOR === "1") {
-    return fakeExpand(input);
-  }
+function requireLLM() {
   if (!process.env.ANTHROPIC_API_KEY) {
     throw new Error(
       "ANTHROPIC_API_KEY not set (set it, or UNJARGON_FAKE_TRANSLATOR=1 for offline dev)",
     );
   }
+}
+
+// L2: generic concept, shared row — NO transcript content in the call.
+async function callConcept(input: {
+  term: string;
+  domain: string;
+  l1: string;
+}): Promise<string> {
+  if (process.env.UNJARGON_FAKE_TRANSLATOR === "1") {
+    console.warn("[expand] UNJARGON_FAKE_TRANSLATOR=1 — using offline fake, NOT the real model");
+    return (
+      FAKE_EXPANSIONS[input.term.toLowerCase()]?.level2 ??
+      `${input.l1} (Offline fake L2 — set ANTHROPIC_API_KEY for a real explanation of “${input.term}”.)`
+    );
+  }
+  requireLLM();
   const client = new Anthropic();
   const resp = await client.messages.create({
     model: TRANSLATION_MODEL,
-    max_tokens: 800,
-    system: expansionSystemPrompt(await getCalibration()),
-    messages: [{ role: "user", content: expansionUserPrompt(input) }],
-    tools: [expansionTool],
-    tool_choice: { type: "tool", name: "emit_expansion" },
+    max_tokens: 500,
+    system: conceptSystemPrompt(await getCalibration()),
+    messages: [{ role: "user", content: conceptUserPrompt(input) }],
+    tools: [conceptTool],
+    tool_choice: { type: "tool", name: "emit_concept" },
   });
   const block = resp.content.find((b) => b.type === "tool_use");
   if (!block || block.type !== "tool_use") {
-    throw new Error("no tool_use block in response");
+    throw new Error("no tool_use block in concept response");
   }
-  const out = block.input as { level2?: string; level3?: string };
-  if (!out.level2?.trim() || !out.level3?.trim()) {
-    throw new Error("expansion missing level2/level3");
-  }
-  return { level2: out.level2.trim(), level3: out.level3.trim() };
+  const level2 = (block.input as { level2?: string }).level2?.trim();
+  if (!level2) throw new Error("concept missing level2");
+  return level2;
 }
 
-// Offline fake (UNJARGON_FAKE_TRANSLATOR=1): hand-written expansions for the
+// L3: grounded in the user's own source message, cached per-user only.
+async function callGrounding(input: {
+  term: string;
+  domain: string;
+  l1: string;
+  projectName: string | null;
+  snippet: string;
+}): Promise<string> {
+  if (process.env.UNJARGON_FAKE_TRANSLATOR === "1") {
+    console.warn("[expand] UNJARGON_FAKE_TRANSLATOR=1 — using offline fake, NOT the real model");
+    return (
+      FAKE_EXPANSIONS[input.term.toLowerCase()]?.level3 ??
+      `The agent mentioned “${input.term}” while working on ${input.projectName ?? "your project"}: “${input.snippet.slice(0, 140)}…” (Offline fake L3.)`
+    );
+  }
+  requireLLM();
+  const client = new Anthropic();
+  const resp = await client.messages.create({
+    model: TRANSLATION_MODEL,
+    max_tokens: 500,
+    system: groundingSystemPrompt(await getCalibration()),
+    messages: [{ role: "user", content: groundingUserPrompt(input) }],
+    tools: [groundingTool],
+    tool_choice: { type: "tool", name: "emit_grounding" },
+  });
+  const block = resp.content.find((b) => b.type === "tool_use");
+  if (!block || block.type !== "tool_use") {
+    throw new Error("no tool_use block in grounding response");
+  }
+  const level3 = (block.input as { level3?: string }).level3?.trim();
+  if (!level3) throw new Error("grounding missing level3");
+  return level3;
+}
+
+// Offline fakes (UNJARGON_FAKE_TRANSLATOR=1): hand-written expansions for the
 // fixture's headline terms, template fallback otherwise. Loudly logged.
 const FAKE_EXPANSIONS: Record<string, { level2: string; level3: string }> = {
   "stiff ode": {
@@ -135,19 +185,3 @@ const FAKE_EXPANSIONS: Record<string, { level2: string; level3: string }> = {
       "The agent chose BDF via scipy.integrate.solve_ivp to replace RK4 in sim/solver.py because your system is stiff. It's the standard prescription: implicit and A-stable, so the NaN blowups stop and the run finishes about 40× faster (3.1s vs 127.4s).",
   },
 };
-
-function fakeExpand(input: {
-  term: string;
-  domain: string;
-  l1: string;
-  projectName: string | null;
-  snippet: string;
-}): { level2: string; level3: string } {
-  console.warn("[expand] UNJARGON_FAKE_TRANSLATOR=1 — using offline fake, NOT the real model");
-  const canned = FAKE_EXPANSIONS[input.term.toLowerCase()];
-  if (canned) return canned;
-  return {
-    level2: `${input.l1} (Offline fake L2 — set ANTHROPIC_API_KEY for a real explanation of “${input.term}”.)`,
-    level3: `The agent mentioned “${input.term}” while working on ${input.projectName ?? "your project"}: “${input.snippet.slice(0, 140)}…” (Offline fake L3.)`,
-  };
-}

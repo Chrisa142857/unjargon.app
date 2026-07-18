@@ -194,12 +194,18 @@ spend teaches everyone.
   message (was: first 80 globally) — dedupe stays correct as the glossary
   grows. L2 expansions were already shared (cached on the term row); L1 is
   first-seen-wins, so later re-extractions never overwrite.
-- What stays private per user: which messages/sessions sighted a term
-  (owner-filtered reads), and L3/learned in `user_terms`. Only the generic
-  explanation crosses users. Note the flip side: a term name + generic L1
-  extracted from one user's transcript is visible to any user whose own text
-  mentions the same string — the extraction prompt keeps L1 generic, which is
-  the safeguard; revisit if project-specific "keyword" terms prove leaky.
+- **Privacy boundary (enforced, not prompt-only —
+  `drizzle/0006_private_keywords.sql`):** only generic vocabulary
+  ("term"/"initial" kinds, `terms.user_id NULL`) is shared. "keyword" terms
+  (file names, commands, internal artifact names) carry `terms.user_id` and
+  are per-user rows: never matched, listed, or expanded for anyone else, and
+  the same string produces separate rows per owner (unique index
+  `terms_owner_key` on `COALESCE(user_id,0), key`). The unauthenticated
+  `GET /api/prompt` template bakes in shared vocabulary only. L2 generation
+  is a separate snippet-free call (`conceptTool`) so no transcript content
+  can reach the shared row; L3 keeps the user's own source snippet and is
+  cached per-user (`user_terms`), with `expandTerm` returning 404 for
+  another user's keyword. Sightings/sessions remain owner-filtered.
 - Verified: user B ingested a raw message mentioning terms user A had paid
   for — B's board showed them with A's L1s at zero AI spend; a later
   translation re-emitting the term neither duplicated the sighting nor

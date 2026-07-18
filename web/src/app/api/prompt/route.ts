@@ -1,3 +1,4 @@
+import { isNull } from "drizzle-orm";
 import { db, tables } from "@/db";
 import { localTranslationTemplate } from "@/lib/prompts";
 import { getCalibration } from "@/lib/settings";
@@ -10,9 +11,13 @@ export const dynamic = "force-dynamic";
 // glossary and domain labels are baked in for dedupe, so collectors should
 // re-fetch frequently (they cache for ~30s).
 export async function GET() {
+  // This endpoint is unauthenticated (old collectors send no credentials), so
+  // the baked-in dedupe list must contain ONLY shared generic vocabulary —
+  // never per-user keyword terms (file names, internal artifact names).
   const terms = await db
     .select({ term: tables.terms.term, domain: tables.terms.domain })
     .from(tables.terms)
+    .where(isNull(tables.terms.userId))
     .limit(120);
   const domains = [...new Set(terms.map((t) => t.domain))];
   return Response.json({

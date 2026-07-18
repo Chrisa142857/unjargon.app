@@ -97,9 +97,17 @@ export const digests = pgTable(
 // A jargon term with layered explanations: L1 one-liner (eager, from
 // extraction), L2 basic concept and L3 "why it's used in your session"
 // (lazy, generated on first click, cached).
+//
+// Privacy boundary: userId NULL = shared generic vocabulary ("term"/"initial"
+// kinds — domain words, acronyms); "keyword" terms (files, commands, internal
+// artifact names) are inherently project-specific and get an owner — never
+// matched, shown, or expanded for anyone else. Uniqueness is per owner via
+// the expression index terms_owner_key (COALESCE(user_id,0), key) in
+// drizzle/0006 — not expressible in this schema DSL, so key is plain here.
 export const terms = pgTable("terms", {
   id: serial("id").primaryKey(),
-  key: text("key").notNull().unique(), // lower-cased canonical name
+  userId: integer("user_id").references(() => users.id),
+  key: text("key").notNull(), // lower-cased canonical name
   term: text("term").notNull(),
   domain: text("domain").notNull(),
   // "keyword" (files/libraries/commands) | "term" (domain term of art) |
