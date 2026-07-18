@@ -1,284 +1,200 @@
 # HANDOFF.md — unjargon.app
-Orientation for the coding agent. Read this first; it tells you which docs are authoritative and what to build.
 
----
-
-## 1. What this project is
-
-**unjargon.app** — "subtitles for your agents." A hackathon project (category: Work & Productivity) for vibe coders and vibe researchers who run Claude Code / Codex on machines they don't fully understand output from (laptops, Linux HPC clusters, remote boxes). Agents love initials and jargon; users don't know them in context. unjargon watches agent transcripts wherever agents run, and serves a live plain-language translation plus a click-to-learn glossary in the browser.
+Orientation for the coding agent. This describes the system **as built and
+deployed** (July 18, 2026). The original build plan and product specs are
+historical — see §9.
 
 Owner: Ziquan (wzq10101@gmail.com). Domain: unjargon.app.
 
-## 2. Document map (read in this order)
+> Agents love initials and jargon; users don't know them in context. unjargon
+> is subtitles for your agents — full-speed agents anywhere, understanding
+> everywhere.
 
-| File | Status | What it's for |
-|---|---|---|
-| `unjargon-spec.md` | **AUTHORITATIVE (v3)** | Current product spec: feature hierarchy, Unjargon Stream UX, single-call pipeline, MVP cut lines, demo script, risks |
-| `vibe-wiki-spec.md` | Superseded (v2) — **still required reading** | v3 references it for full architecture detail: collector internals, install/service mechanics, HPC notes, transcript-discovery guarantee, backend/API/schema, deploy |
-| `prototype-spec.md` | Historical (v1, Mac-native) | Origin of the L1/L2/L3 explanation design and extraction prompt rules. Skim only |
-| `motivation-research.md` | Context | Competitive landscape + gap analysis; use for README/pitch copy, not for engineering |
+## 1. What this is
 
-Rule of conflict: v3 > v2 > v1. Product name is **unjargon** everywhere (v2 says "vibe-wiki", v1 says "AgentLens" — both renamed).
+**"Subtitles for your agents."** A Go collector (`unjargond`) tails Claude
+Code (`~/.claude/projects/**/*.jsonl`) and Codex (`~/.codex/sessions/**`)
+transcripts on any machine the user pairs, redacts secrets, and ships
+assistant messages to a Next.js + Drizzle + Postgres web app. The app serves,
+live over SSE: a plain-language subtitle per message, a term board of picked
+jargon (keywords / terms / initials) with layered explanations
+(L1 one-liner → L2 basic concept → L3 "in your sessions"), digests that
+collapse long sessions, and a `/wiki` glossary.
 
-## 3. Locked decisions (do not relitigate)
+## 2. Architecture invariants (current, do not silently break)
 
-- **Two components:** `unjargond` collector (Go, single static binary, darwin/linux × amd64/arm64) + web app (Next.js full-stack + Postgres). Collector is dumb (tail + ship); all LLM work server-side.
-- **Capture = transcript files, not wrappers/screen.** Claude Code: `~/.claude/projects/**/*.jsonl` (append-only JSONL). Primary discovery via a `SessionStart` hook the installer registers in `~/.claude/settings.json` (hook input contains `transcript_path`; collector listens on localhost). Directory watch = fallback. Codex (`~/.codex/sessions/**`) is a nice-to-have drop-in parser.
-- **User-level services, no root:** launchd LaunchAgent (macOS); `systemd --user` (Linux); plain background process + PID file (HPC without systemd user sessions). Polling fallback (~2s mtime) on NFS/Lustre where inotify is unreliable.
-- **Killer feature = the Unjargon Stream** (auto-scrolling plain-language subtitles per agent message), then annotated-original expansion, then term chips/wiki. Default view requires zero clicks to understand.
-- **One LLM call per debounced message** (≈2s debounce, Claude Haiku, strict JSON) returns `{subtitle, annotations[], terms[]}`. L1 eager; L2/L3 lazy on click, cached.
-- **Trust rules in the rewrite prompt:** never soften failures; numbers/outcomes/filenames verbatim; skip trivial messages (acks, tool chatter); ≤3 sentences per subtitle; never invent terms not in the text; cap ~6 new terms/message.
-- **Realtime = SSE**, not WebSockets. **Auth:** GitHub OAuth or magic link for web; bearer device-tokens for collectors. **Deploy:** Vercel + Neon/Supabase Postgres (or single Railway service).
+- **The user's own AI credentials do the LLM work by default.** Collectors run
+  local-translate mode (`claude -p`, model haiku) — the server needs no API
+  key. `ANTHROPIC_API_KEY` on the server is an optional override;
+  `UNJARGON_FAKE_TRANSLATOR=1` is the offline dev/demo mode.
+- **Transparency + budget:** at most 30 local AI subprocesses, each killed
+  after 30 s, per rolling 5-hour window (15 min / 5% of local AI runtime),
+  persisted in `~/.local/state/unjargond/ai-budget.json`. The budget never
+  blocks tailing (`ErrBudgetWait`, never sleep); usage is always shown in the
+  UI (header chip + import card). Covers translation, digest, and expansion
+  work alike.
+- **Trust rules, verbatim in `web/src/lib/prompts.ts` (all prompting lives in
+  that one file):** never soften failures; numbers/outcomes/filenames
+  verbatim; skip trivial messages; ≤3 sentences per subtitle; never invent
+  terms not in the text; cap ~6 new terms/message.
+- **Auth:** Google OAuth → HttpOnly signed SameSite=Lax cookie; collectors
+  hold hashed per-device tokens obtained via short-lived pairing codes.
+  `/api/ingest` accepts only paired-device credentials (the old global
+  `INGEST_TOKEN` is gone — never reintroduce it). The authenticated app runs
+  **same-origin on the backend**; there is deliberately no CORS.
+- **Privacy boundary on the shared glossary:** only generic vocabulary
+  ("term"/"initial" kinds, `terms.user_id NULL`) is shared across users.
+  "keyword" terms (files, commands, internal artifact names) are per-user
+  rows; shared L2 is generated without any transcript content; L3, learned
+  state, sightings, messages, digests are all per-user/owner-filtered.
+  Enforcement is mechanical (schema + code), not prompt-only — see §7.
+- **Realtime = SSE** (in-process bus; swap to LISTEN/NOTIFY if ever
+  serverless). Collector is polling-based (~2 s mtime) on purpose: inotify is
+  unreliable on NFS/Lustre. Parse transcripts defensively (assistant-role
+  text blocks only; per-tool parser behind an interface; fixtures under
+  `collector/testdata`). Collector redacts key-like strings and `.env` blobs
+  before anything leaves the machine.
+- Render's dashboard is the owner's infrastructure admin, never a customer
+  interface.
 
-## 4. Build order (MVP, thin end-to-end slice first)
+## 3. Repo map
 
-1. **Monorepo scaffold:** `collector/` (Go) + `web/` (Next.js + Postgres via Prisma/Drizzle). Shared: none (JSON over HTTPS is the contract).
-2. **Walking skeleton:** collector tails one hardcoded JSONL → `POST /api/ingest` → store → SSE → raw text renders in `/live`. Get this working before any LLM code.
-3. **Translation pipeline:** debounce → Haiku call → `{subtitle, annotations, terms}` → subtitle stream UI with ▸ expansion and highlight taps.
-4. **Term cards:** L1 from extraction; `POST /api/terms/:id/expand` for lazy L2/L3 (L3 prompt includes source-message snippet).
-5. **Hardening for demo:** hook-based discovery, offline buffer + backoff, installer script (`install.sh` with `--token`), NFS polling fallback, `unjargond replay fixture.jsonl` command (deterministic demo fallback — record a real session as fixture early!).
-6. Nice-to-have order: calibration slider → global toggle (⌘J) → `/wiki` page → Codex parser → quiz.
+| Path | What it is |
+|---|---|
+| `collector/cmd/unjargond` | CLI: `run` (daemon), `replay` (fixture demo), `hook` (SessionStart) |
+| `collector/internal/daemon` | discovery, tailing, ship, work loops (expand → translate → digest), status reporting |
+| `collector/internal/aicli` | local-translate mode: budget, `claude -p` invocation, output parsing, recursion guard |
+| `collector/internal/{parse,tail,ship,buffer,redact}` | per-tool parsers, byte-offset tailer, HTTP shipping, offline queue, redaction |
+| `web/src/lib/prompts.ts` | ALL prompting (translation, concept L2, grounding L3, digests, local variants) |
+| `web/src/lib/{translate,digest,expand,glossary}.ts` | pipelines + the three work queues + zero-AI term matching |
+| `web/src/lib/{auth,owner,api,bus}.ts` | cookie/device auth, ownership joins, API base + static-build bounce, SSE bus |
+| `web/src/app/live/stream.tsx` | the /live app: term board, stream view, import-progress card, budget chip |
+| `web/src/app/api/*` | routes; `work/{translate,digest,expand}` are the collector queues |
+| `web/drizzle/*.sql` | migrations 0000–0008, applied by the container entrypoint on every deploy |
+| `install.sh`, `deploy/`, `render.yaml`, `Dockerfile` | installer and Render/container deployment |
+| `.github/workflows/` | `pages.yml`, `release-collector.yml` (dispatch with a tag), `backend-check.yml` (deployed wiring probe) |
 
-Definition of demo-done: two collectors (Mac laptop + Linux VM) feeding one `/live` stream in a browser, phone-friendly layout, term card opens with L3 grounded in the actual message.
+## 4. Deployment and installer
 
-## 5. Key implementation gotchas (learned during design)
-
-- CC's JSONL entry format is **internal and version-drifts** — parse defensively: take assistant-role text blocks only, ignore unknown fields, keep parser per-tool behind an interface, test against recorded fixtures.
-- Consume **only complete lines** when tailing (keep a remainder buffer per file); track byte offsets per file.
-- Transcripts can contain secrets → collector runs a redaction pass (key-like strings, `.env` content) before sending.
-- Claude Code on the web (cloud sandbox) leaves no local transcript — out of scope, don't chase it.
-- Streaming means many small appends per message — the 2s debounce is what batches them into one translation call.
-
-## 6. Open questions (owner input needed — don't block, pick the default)
-
-- Postgres ORM choice (default: Drizzle) and Vercel vs Railway (default: whichever deploys first try).
-- Calibration slider copy/levels (default: new / amateur / expert).
-- Exact redaction rules (default: regex for common key formats + refuse `.env`-like blobs).
-
-## 7. Pitch one-liner (for README)
-
-> Agents love initials and jargon; users don't know them in context. unjargon is subtitles for your agents — full-speed agents anywhere, understanding everywhere.
-
----
-
-## 8. Current deployment and installer state (July 2026)
-
-- **Hosted backend:** a single owner-managed Render service is configured at
-  `https://unjargon.onrender.com`. GitHub Pages builds set
-  `NEXT_PUBLIC_API_BASE` from the `UNJARGON_API_BASE` repository variable; its
-  fallback is the same Render URL.
-- **Frontend:** GitHub Pages deploys on every push to `main` via
-  `.github/workflows/pages.yml`. Since Google sign-in landed, **the
-  authenticated app runs same-origin on the backend** (the session cookie is
-  SameSite=Lax, so cross-site fetches can never authenticate; there is
-  deliberately no CORS). The Pages site is the landing page whose sign-in
-  links point at the backend, and its static `/live`/`/wiki` pages bounce to
-  the backend origin on load (`bounceToApiOrigin` in `web/src/lib/api.ts`).
-  `.github/workflows/backend-check.yml` is a full wiring probe of both
-  deployments, run from GitHub's runners. Do not re-add a persistent top
-  banner; it was intentionally removed.
-- **Installer:** `install.sh` is served from GitHub raw content and downloads
-  binaries from GitHub Releases. It prompts for a short-lived pairing code
-  created by the signed-in user in `/live`; it never asks for a Render secret:
+- **Backend:** owner-managed Render service at `https://unjargon.onrender.com`
+  (Docker, bundled Postgres unless `DATABASE_URL` is set — bundled storage
+  resets on every deploy). Needs env: `AUTH_SECRET`, `GOOGLE_CLIENT_ID`,
+  `GOOGLE_CLIENT_SECRET`, `APP_URL`.
+- **Frontend:** GitHub Pages deploys on every push to `main`
+  (`pages.yml`; API base from the `UNJARGON_API_BASE` repo variable, falling
+  back to the Render URL). The Pages site is the **landing page**; its static
+  `/live`/`/wiki` bounce to the backend origin (`bounceToApiOrigin` in
+  `web/src/lib/api.ts`) because cookie auth is same-origin only. Do not
+  re-add a persistent top banner; it was intentionally removed.
+- **Installer:** no secrets, just a pairing code created by the signed-in
+  user in `/live`:
 
   ```sh
   curl -fsSL https://raw.githubusercontent.com/Chrisa142857/unjargon.app/main/install.sh \
     | sh -s -- --server https://unjargon.onrender.com
   ```
 
-  The first release is `v0.1.0`, with `darwin/linux × amd64/arm64` binaries.
-  `.github/workflows/release-collector.yml` builds and publishes the next
-  release when manually dispatched with a tag.
-- **Verification:** GitHub Pages and the collector release workflow both last
-  completed successfully after the changes above. Local frontend `npm ci` was
-  not reliable in the development checkout (`ENOTEMPTY` in generated
-  `node_modules`); use the clean GitHub Actions build as the recorded check.
+- **Collector releases:** `v0.1.5` is current (expansion work loop; `v0.1.4`
+  added the non-blocking budget + translate-work loop). Older installs must
+  re-run the install command or their queued work sits unserved.
+  `release-collector.yml` runs `go test ./...` before building
+  darwin/linux × amd64/arm64.
+- **Verification:** dispatch `backend-check.yml` (Actions tab) — it probes
+  every endpoint's auth from GitHub's runners, checks build currency (the
+  prompt's privacy-rules marker), the OAuth redirect, landing links, and the
+  Pages bundle's feature markers. Last run fully green. (The dev sandbox
+  cannot reach onrender.com/github.io directly; probe from runners.)
 
-## 9. Hosted-user implementation (July 2026)
-
-The application now has the minimal hosted-user boundary:
-
-- Google OAuth creates an HttpOnly, signed browser session.
-- `users`, `pairings`, `devices.user_id`, and hashed per-device tokens are in
-  `drizzle/0003_users.sql`.
-- `/api/ingest` accepts only a paired device credential; the global
-  `INGEST_TOKEN` is obsolete.
-- Bootstrap and SSE reads are filtered by device owner. Generic L1/L2 terms
-  remain shared; L3 and learned state are in `user_terms`.
-- Render's dashboard is only for the owner's infrastructure administration;
-  it must not be the customer/admin interface for the application.
-
-Render is the owner's infrastructure dashboard, not a customer interface.
-
-## 10. Minimum hosted-user migration (do this, skip the rest)
-
-Render is owner-managed infrastructure. Users need ordinary individual
-accounts; do not add workspaces, memberships, or app-level admin roles until
-the product actually needs shared teams.
-
-1. Use managed Postgres before inviting users; bundled database storage is
-   ephemeral (it resets on every Render deploy).
-2. Apply the migrations in `drizzle/` (the container entrypoint applies all of
-   them on every deploy).
-3. ~~Remaining hardening: owner checks on legacy auxiliary routes~~ DONE
-   (July 18): `/api/wiki`, digest detail, settings, and every work endpoint
-   are owner- or device-scoped; verified by the deployed wiring probe.
-
-Add teams/workspaces, customer-facing admin screens, and provider OAuth only
-when a real customer requires them. The owner manages deployment, logs, and
-environment in Render's web UI.
-
-Signing in with a Claude/Codex-associated identity does **not** authorize a
-web service to read local histories. The right UX is: sign in → pair this
-machine → run the collector once. The collector already watches local Claude
-and Codex transcript directories and can discover existing local JSONL files;
-cloud-only sessions remain out of scope unless their provider exposes a
-separate, consented export/API integration.
-
-## 11. Current collector safety and progress work (July 18, 2026)
-
-- Collector releases: `v0.1.4` (non-blocking budget + translate-work loop +
-  status reporting) and `v0.1.5` (expansion-work loop) are published;
-  machines installed earlier must re-run the install command — until they
-  do, their user's queued work sits unserved.
-- Local translation is shared by **both Claude Code and Codex transcripts**
-  and every supported collector binary (macOS/Linux × amd64/arm64). The
-  release workflow now runs `go test ./...` before building all four targets.
-- The local budget is persisted at `~/.local/state/unjargond/ai-budget.json`:
-  no more than 30 local AI subprocesses, each killed after 30 seconds, in a
-  rolling five-hour window (15 minutes / 5% runtime). It also covers digest
-  work. This controls executable time, not a provider-reported token meter.
-### Truthful import status and ETA (implemented July 18, 2026)
+## 5. Import pipeline, work queues, truthful progress
 
 The persisted, globally chronological work queue is **Postgres itself**:
-untranslated messages (`translated_at IS NULL`), ordered by message time
-across every session and device a user owns. This satisfies the retention
-requirements strictly better than a collector-side file — `total`,
-`completed`, and rate survive collector *and* server restarts; the
-budget-reset time survives restarts in `~/.local/state/unjargond/ai-budget.json`.
+untranslated messages (`translated_at IS NULL`) ordered by message time
+across every session/device a user owns. Totals, completions, and rate
+survive any restart.
 
-- Collectors always ship raw immediately. An exhausted budget no longer
-  sleeps inside `Complete()` (which used to stall tailing for up to 5 hours);
-  it returns `ErrBudgetWait` and the message ships untranslated.
-- A no-key server leaves non-trivial messages **queued**, never marks them
-  skipped (`web/src/lib/translate.ts`); collectors claim them oldest-first via
-  `GET/POST /api/work/translate` (5-min claim reaping, mirrors digest work)
-  and run them within the same budget. Nothing is permanently skipped.
-- `POST /api/status` (paired-device auth) stores per-device budget state
-  (`devices.import_status`: used/limit/paused-until). Migration:
-  `drizzle/0004_translate_queue.sql`.
-- `/api/bootstrap` returns `progress.{messages, translated, ratePerHour,
-  pausedUntil}`. `ratePerHour` counts translations finished in the last hour
-  (from `translated_at`) — **never inferred from upload recency**.
+- Collectors always ship raw immediately; an exhausted budget returns
+  `ErrBudgetWait` and the message ships untranslated. A no-key server leaves
+  non-trivial messages queued — **nothing is ever permanently skipped**.
+- Three collector work loops (30 s cycle, order: expansions first — a user is
+  actively waiting — then translations oldest-first, then digests), all
+  claim/complete with 5-minute claim reaping:
+  `GET/POST /api/work/expand[/:id]`, `/api/work/translate`,
+  `/api/work/digest[/:id]`.
+- `POST /api/status` (device auth) stores per-device budget state on
+  `devices.import_status`; `/api/bootstrap` returns
+  `progress.{messages, translated, ratePerHour, pausedUntil, budgets[]}`.
+  `ratePerHour` counts translations finished in the last hour from
+  `translated_at` — **never inferred from upload recency**.
 - The `/live` card shows `completed / total`, a real progress bar, the
-  budget-pause resume time, and an ETA computed only from the measured rate;
-  it stays visible until the queue is empty. Raw history is browsable
-  immediately throughout.
-- Because unjargon spends the **user's own AI credentials**, budget usage is
-  always on screen: a persistent `AI used/limit` header chip (per-device
-  breakdown in the tooltip, amber when ≥80% or resting) plus an
-  "AI calls used (your credentials)" line in the import card.
+  budget-pause resume time, and a rate-derived ETA; raw history is browsable
+  throughout.
 
-Verified end-to-end locally: no-key server queues → chronological claim
-(oldest `ts` first across sessions) → daemon work loop translates with a stub
-CLI, delivers, reports status → bootstrap and the `/live` card show 5/7 with
-paused-until + ETA. `go test ./...`, `tsc --noEmit`, and eslint pass.
+## 6. Shared jargon knowledge base
 
-### Shared jargon knowledge base (July 18, 2026)
+One user's extraction spend teaches every user, at zero marginal AI cost:
 
-The single backend's glossary is a cross-user knowledge base that saves AI
-credit: `terms` rows (generic L1/L2) are global, so one user's extraction
-spend teaches everyone.
+- **Zero-AI matching at ingest** (`web/src/lib/glossary.ts`): messages are
+  matched against the shared glossary (SQL `position()` + word-boundary);
+  sightings recorded before any translation. Unique index on
+  `term_sightings(term_id, message_id)` prevents double-counting.
+- Translation prompts list exactly the known terms present in the message
+  (scales past any cap); L1 is first-seen-wins.
+- **Cards default to the shared basic explanation** (L1 + L2; L2 generated
+  once ever, globally, snippet-free). The in-context L3 is strictly opt-in
+  ("explain in my sessions · 1 AI call",
+  `POST /api/terms/:id/expand {level:"grounding"}`), cached per user. On a
+  no-key server both layers queue (`expansion_requests`) for the requesting
+  user's own collector; cards show a queued state and poll every 5 s.
 
-- **Zero-AI matching at ingest** (`web/src/lib/glossary.ts`): every ingested
-  message is matched against the shared glossary (SQL `position()` +
-  word-boundary check); sightings are recorded immediately, so known terms
-  appear on a user's board before any translation — even budget-paused or
-  with no AI CLI. A unique index on `term_sightings(term_id, message_id)`
-  (`drizzle/0005_shared_glossary.sql`) keeps this and the translation path
-  from double-counting.
-- Server translation prompts now list exactly the known terms present in the
-  message (was: first 80 globally) — dedupe stays correct as the glossary
-  grows. L2 expansions were already shared (cached on the term row); L1 is
-  first-seen-wins, so later re-extractions never overwrite.
-- **Term cards default to the shared basic explanation only** (L1 + L2 —
-  generic, cached once globally, no per-user AI spend). The in-context L3
-  requires querying the user's own stream with AI, so it is strictly opt-in:
-  an "explain in my sessions · 1 AI call" button sends
-  `POST /api/terms/:id/expand {level:"grounding"}`; a cached L3 returns
-  free. On a no-key server the request is queued (`expansion_requests`,
-  `drizzle/0008`) and served by the requesting user's own collector via
-  `GET/POST /api/work/expand` — first in the work cycle since a user is
-  actively waiting, within the same local AI budget. Cards show a "queued —
-  your collector is explaining this…" state and poll every 5s while pending.
-  Requires collector ≥ v0.1.5.
-- **Privacy boundary (enforced, not prompt-only —
-  `drizzle/0006_private_keywords.sql`):** only generic vocabulary
-  ("term"/"initial" kinds, `terms.user_id NULL`) is shared. "keyword" terms
-  (file names, commands, internal artifact names) carry `terms.user_id` and
-  are per-user rows: never matched, listed, or expanded for anyone else, and
-  the same string produces separate rows per owner (unique index
-  `terms_owner_key` on `COALESCE(user_id,0), key`). The unauthenticated
-  `GET /api/prompt` template bakes in shared vocabulary only. L2 generation
-  is a separate snippet-free call (`conceptTool`) so no transcript content
-  can reach the shared row; L3 keeps the user's own source snippet and is
-  cached per-user (`user_terms`), with `expandTerm` and the learned route
-  returning 404 for another user's keyword. Sightings/sessions remain
-  owner-filtered. Further mechanical guards (July 18): artifact-shaped
-  strings (paths, files, dotted modules) are forced to kind "keyword"
-  regardless of the model's label; a would-be-shared term whose L1/domain
-  mentions the project name or a slash path is demoted to a user-owned row
-  (`looksProjectSpecific` in translate.ts); the translation prompts state
-  that L1/domain are shown to other users and must stay generic;
-  `drizzle/0007_leak_cleanup.sql` scrubs any pre-0006 cross-user sightings,
-  user_terms rows, and annotation refs tied to now-private terms.
-- Verified: user B ingested a raw message mentioning terms user A had paid
-  for — B's board showed them with A's L1s at zero AI spend; a later
-  translation re-emitting the term neither duplicated the sighting nor
-  overwrote the L1.
+## 7. Privacy enforcement detail
 
-Deliberate ceiling: the collector does not pre-count assistant messages
-before shipping — raw shipping has no AI cost, so the server total stabilizes
-within minutes of install and stays truthful; add a local pre-inventory only
-if that brief ramp-up proves confusing. Claiming is select-then-update, not
-`FOR UPDATE SKIP LOCKED`: two devices polling in the same instant can waste
-one budget call; add row locking when multi-device users appear.
+- `terms.user_id` (NULL = shared); keywords always owned; uniqueness per
+  owner (`terms_owner_key` on `COALESCE(user_id,0), key`) so the same string
+  yields separate rows per owner. Foreign private terms are never matched,
+  listed, expanded, or learned (404), and never appear in the unauthenticated
+  `GET /api/prompt` template.
+- Mechanical guards in `translate.ts`: artifact-shaped strings (paths, files,
+  dotted modules) are forced to kind "keyword" regardless of the model's
+  label; a would-be-shared term whose L1/domain mentions the project name or
+  a slash path is demoted to user-owned (`looksProjectSpecific`).
+- L2 generation gets no transcript content (separate `conceptTool` call);
+  L3 keeps the user's own snippet, cached in `user_terms`.
+- `drizzle/0007_leak_cleanup.sql` scrubbed pre-boundary cross-user sightings,
+  `user_terms` rows, and annotation refs.
 
-## 12. Job log — July 18, 2026 session
+## 8. Job log — July 18, 2026 session
 
-Everything below is on `main`, deployed (Pages + Render), and verified; each
-job's detail lives in the section noted. Migrations `0004`–`0008` shipped.
+All on `main`, deployed, verified end-to-end (stub-CLI daemon runs, psql
+checks, Playwright screenshots, `go test`, `tsc`, eslint, and the deployed
+wiring probe). Migrations `0004`–`0008` shipped; collector `v0.1.4`+`v0.1.5`
+released.
 
-1. **Truthful import status and ETA** (§11): chronological translate-work
-   queue in Postgres, non-blocking collector budget (`ErrBudgetWait` instead
-   of a tail-stalling sleep), `POST /api/status`, bootstrap progress
-   `{translated/messages, ratePerHour, pausedUntil}`, honest `/live` card.
-2. **AI budget always visible** (§11): persistent `AI used/limit` header
-   chip + "AI calls used (your credentials)" card line — unjargon spends the
-   user's own credentials, so usage is never hidden.
-3. **Shared jargon knowledge base** (§11): zero-AI glossary matching at
-   ingest; message-relevant known-terms dedupe in prompts; one user's L1/L2
-   spend teaches every user.
-4. **Privacy boundary on sharing** (§11): per-user keyword terms, snippet-free
-   shared-L2 generation, shared-vocabulary-only `/api/prompt`, mechanical
-   kind-override + project-specific demotion, historical cross-user link
-   cleanup (`0007`).
-5. **Cost model for cards** (§11): default card = shared basic explanation
-   (L1+L2, free after first generation); in-context L3 strictly opt-in
-   ("explain in my sessions · 1 AI call"), cached per user.
-6. **Expansion work queue** (§11): no-key servers queue L2/L3 requests;
-   the requester's collector serves them first in its work cycle; cards show
-   a queued state and poll. Collector `v0.1.5`.
-7. **Deployment wiring verified end to end** (§8): `backend-check.yml` is a
-   full probe of every endpoint's auth, build currency (prompt privacy-rules
-   marker), OAuth redirect, landing links, and Pages bundle markers — last
-   run fully green. Found and fixed the post-auth wart: static `/live`/`/wiki`
-   now bounce to the backend origin (same-origin cookie auth; no CORS by
-   design).
+1. Truthful import status and ETA (§5).
+2. AI budget always visible in the UI (§5).
+3. Shared jargon knowledge base with zero-AI matching (§6).
+4. Privacy boundary on sharing, mechanically enforced (§7).
+5. Card cost model: shared layers by default, in-context L3 opt-in (§6).
+6. Expansion work queue for no-key servers (§5–6).
+7. Deployed wiring verified; static pages bounce to the backend origin (§4).
 
-Next when needed (no required next implementation is currently open):
-managed Postgres before inviting users (§10 — bundled DB resets per deploy);
-`FOR UPDATE SKIP LOCKED` claims when multi-device users appear; a local
-pre-inventory only if the post-install ramp-up confuses; authenticate
-`/api/prompt` (new collectors could send their device token) to serve
-per-user keyword dedupe in local-translate templates.
+**Next when needed (nothing is currently required):** managed Postgres before
+inviting users (bundled DB resets per deploy); `FOR UPDATE SKIP LOCKED`
+claims when multi-device users appear; a local pre-inventory only if the
+post-install ramp-up confuses; authenticate `/api/prompt` (new collectors
+could send their device token) to serve per-user keyword dedupe in
+local-translate templates. Do not add teams/workspaces/admin screens until a
+real customer needs them.
+
+## 9. Historical documents
+
+The original specs remain in the repo for product rationale, not for current
+architecture — where they conflict with this file, **this file wins** (they
+predate local-translate mode, Google auth, per-device pairing, the work
+queues, and the Render/Pages deployment):
+
+| File | Status |
+|---|---|
+| `unjargon-spec.md` (v3) | Product spec: feature hierarchy, stream UX, demo script |
+| `vibe-wiki-spec.md` (v2) | Deep architecture background (says "vibe-wiki") |
+| `prototype-spec.md` (v1) | Origin of L1/L2/L3 design (says "AgentLens") |
+| `motivation-research.md` | Competitive landscape, README/pitch copy |
