@@ -1,7 +1,8 @@
-# On-demand health probe of the deployed backend, run from GitHub's runners
-# (the dev sandbox can't reach onrender.com directly). Verbose on purpose:
-# Render's edge headers distinguish "no live deploy" (x-render-routing:
-# no-server) from a deployed-but-unhealthy service.
+# On-demand wiring probe of the deployed pair, run from GitHub's runners
+# (the dev sandbox can't reach onrender.com or github.io directly). Checks
+# that every feature endpoint exists on the Render backend with the expected
+# auth behavior, that the deployed code is current (marker strings), and
+# that the GitHub Pages frontend bundle carries the latest UI.
 name: Check backend health
 on:
   workflow_dispatch:
@@ -9,23 +10,69 @@ jobs:
   check:
     runs-on: ubuntu-latest
     steps:
-      - name: Probe backend
+      - name: Probe backend endpoints
         env:
           URL: ${{ vars.UNJARGON_API_BASE || 'https://unjargon.onrender.com' }}
         run: |
           echo "checking $URL"
-          echo "--- DNS ---"
-          host "$(echo "$URL" | sed 's|https://||')" || true
-          echo "--- verbose HEAD / (edge headers) ---"
-          curl -sv -o /dev/null --max-time 12 "$URL/" 2>&1 | grep -E "^(<|\*) " | head -30 || true
-          echo "--- GET /live with retries ---"
-          code=000
-          for i in $(seq 1 2); do
-            code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 12 "$URL/live") || code=000
-            echo "attempt $i: GET /live → $code"
+          fail=0
+          expect() { # expect <want-status> <method> <path> [data]
+            want=$1; method=$2; path=$3; data=${4:-}
+            if [ -n "$data" ]; then
+              code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 -X "$method" -H 'Content-Type: application/json' -d "$data" "$URL$path") || code=000
+            else
+              code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 -X "$method" "$URL$path") || code=000
+            fi
+            if [ "$code" = "$want" ]; then echo "OK   $method $path → $code"; else echo "FAIL $method $path → $code (want $want)"; fail=1; fi
+          }
+          # wake a sleeping free instance first
+          for i in $(seq 1 4); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 20 "$URL/live") || code=000
+            echo "warmup $i: GET /live → $code"
             [ "$code" = "200" ] && break
-            sleep 15
+            sleep 20
           done
-          echo "--- GET /api/bootstrap ---"
-          curl -s -D - --max-time 12 "$URL/api/bootstrap" | head -c 600; echo
-          [ "$code" = "200" ]
+          expect 200 GET  /live
+          expect 401 GET  /api/bootstrap
+          expect 401 GET  /api/wiki
+          expect 401 GET  /api/stream
+          expect 401 POST /api/ingest '{"device":"x","tool":"t","session_id":"s","messages":[]}'
+          expect 401 GET  /api/work/translate
+          expect 401 POST /api/work/translate '{"items":[]}'
+          expect 401 GET  /api/work/digest
+          expect 401 GET  /api/work/expand
+          expect 401 POST /api/work/expand/1 '{"text":"x"}'
+          expect 401 POST /api/status '{"budget_used":0,"budget_limit":30}'
+          expect 401 POST /api/terms/1/expand '{}'
+          expect 401 POST /api/terms/1/learned
+          expect 401 GET  /api/settings
+          echo "--- GET /api/prompt (unauthenticated by design) ---"
+          prompt=$(curl -s --max-time 15 "$URL/api/prompt")
+          echo "$prompt" | head -c 200; echo
+          echo "$prompt" | grep -q '{{MESSAGE}}' && echo "OK   prompt has {{MESSAGE}}" || { echo "FAIL prompt missing {{MESSAGE}}"; fail=1; }
+          echo "$prompt" | grep -q 'PRIVACY' && echo "OK   prompt has latest privacy rules (current build)" || { echo "FAIL prompt missing privacy rules — Render still on an older build"; fail=1; }
+          echo "--- OAuth start (needs GOOGLE_* env on Render) ---"
+          code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 "$URL/api/auth/google") || code=000
+          case "$code" in 30[127]) echo "OK   /api/auth/google redirects ($code)";; *) echo "WARN /api/auth/google → $code (check GOOGLE_CLIENT_ID/SECRET/AUTH_SECRET env)";; esac
+          echo "--- CORS for the Pages origin ---"
+          acao=$(curl -s -D - -o /dev/null --max-time 15 -H 'Origin: https://chrisa142857.github.io' "$URL/api/prompt" | tr -d '\r' | grep -i '^access-control-allow-origin:' || true)
+          echo "${acao:-<no ACAO header>}"
+          [ -n "$acao" ] && echo "OK   CORS header present" || { echo "FAIL no CORS header"; fail=1; }
+          exit $fail
+      - name: Probe Pages frontend bundle
+        run: |
+          BASE=https://chrisa142857.github.io/unjargon.app
+          fail=0
+          code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 "$BASE/live/") || code=000
+          echo "GET /live/ → $code"
+          [ "$code" = "200" ] || { echo "FAIL pages /live not served"; exit 1; }
+          # collect the page's JS chunks and grep for current-feature markers
+          curl -s --max-time 15 "$BASE/live/" -o live.html
+          grep -oE '/unjargon\.app/_next/static/[^"]+\.js' live.html | sort -u > chunks.txt
+          echo "$(wc -l < chunks.txt) chunks referenced"
+          : > bundle.js
+          while read -r c; do curl -s --max-time 20 "https://chrisa142857.github.io$c" >> bundle.js; done < chunks.txt
+          for marker in 'explain in my sessions' 'AI calls used' 'queued — your collector' 'Explaining your agent history'; do
+            if grep -q "$marker" bundle.js live.html; then echo "OK   frontend has: $marker"; else echo "FAIL frontend missing: $marker (stale Pages build?)"; fail=1; fi
+          done
+          exit $fail
