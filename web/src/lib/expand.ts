@@ -11,20 +11,25 @@ import {
   groundingUserPrompt,
 } from "@/lib/prompts";
 import { getCalibration } from "@/lib/settings";
+import { serverCanLLM } from "@/lib/digest";
 
-// Lazy L2/L3 generation. Two separate calls — a privacy boundary: L2 is
-// cached on the (possibly shared) terms row, so its call never sees any
-// transcript content; L3 is per-user (user_terms), grounded in a source
-// message the user owns — the one they tapped from, else their most recent
-// sighting.
+// Lazy L2/L3 generation. Two separate calls — a privacy AND cost boundary:
+// L2 (basic concept) is generic, generated without any transcript content,
+// and cached on the shared terms row — one call ever, for everyone. L3
+// ("in your session") must query the user's own stream with AI, so it is
+// strictly OPT-IN: never generated unless the user explicitly asks
+// (grounding: true); a card shows only the shared basic explanation by
+// default.
 
 const SNIPPET_MAX = 1200;
 
 export async function expandTerm(
   termId: number,
   userId: number,
-  sourceMessageId?: number,
-): Promise<{ l2: string; l3: string; cached: boolean } | null> {
+  opts: { sourceMessageId?: number; grounding?: boolean } = {},
+): Promise<
+  { l2: string | null; l3: string | null; l3Available: boolean } | null
+> {
   const [term] = await db
     .select()
     .from(tables.terms)
@@ -33,18 +38,18 @@ export async function expandTerm(
   // Another user's private keyword: not visible, not expandable.
   if (term.userId !== null && term.userId !== userId) return null;
   const [profile] = await db.select().from(tables.userTerms).where(and(eq(tables.userTerms.userId, userId), eq(tables.userTerms.termId, termId)));
-  if (term.l2 && profile?.l3) {
-    return { l2: term.l2, l3: profile.l3, cached: true };
-  }
+  const l3Available = serverCanLLM();
 
   let l2 = term.l2;
-  if (!l2) {
+  if (!l2 && serverCanLLM()) {
     l2 = await callConcept({ term: term.term, domain: term.domain, l1: term.l1 });
     await db.update(tables.terms).set({ l2 }).where(eq(tables.terms.id, termId));
   }
 
+  // Cached L3 is free to return; generating one happens only on request.
   let l3 = profile?.l3 ?? null;
-  if (!l3) {
+  if (!l3 && opts.grounding && serverCanLLM()) {
+    const sourceMessageId = opts.sourceMessageId;
     // Find the source message for grounding L3 (must belong to this user).
     let source: { text: string; sessionId: number } | null = null;
     if (sourceMessageId) {
@@ -92,7 +97,7 @@ export async function expandTerm(
     await db.insert(tables.userTerms).values({ userId, termId, l3 }).onConflictDoUpdate({ target: [tables.userTerms.userId, tables.userTerms.termId], set: { l3 } });
   }
 
-  return { l2, l3, cached: false };
+  return { l2, l3, l3Available };
 }
 
 function requireLLM() {

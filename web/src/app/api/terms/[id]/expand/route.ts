@@ -3,8 +3,10 @@ import { requireUser } from "@/lib/auth";
 
 export const dynamic = "force-dynamic";
 
-// Lazy L2/L3 for a term card. Body may carry {messageId} so L3 is grounded
-// in the exact message the user tapped from.
+// Lazy expansion for a term card. Default: the shared generic layer (L2)
+// only — no per-user AI spend. Body {level: "grounding"} explicitly requests
+// the in-context L3 (an AI call over the user's own stream); {messageId}
+// grounds it in the exact message the user tapped from.
 export async function POST(
   req: Request,
   { params }: { params: Promise<{ id: string }> },
@@ -18,15 +20,20 @@ export async function POST(
   }
 
   let messageId: number | undefined;
+  let grounding = false;
   try {
     const body = await req.json();
     if (Number.isInteger(body?.messageId)) messageId = body.messageId;
+    grounding = body?.level === "grounding";
   } catch {
     // empty body is fine
   }
 
   try {
-    const result = await expandTerm(termId, user.id, messageId);
+    const result = await expandTerm(termId, user.id, {
+      sourceMessageId: messageId,
+      grounding,
+    });
     if (!result) {
       return Response.json({ error: "term not found" }, { status: 404 });
     }

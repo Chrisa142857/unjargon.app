@@ -436,9 +436,11 @@ export default function LiveStream() {
   }
 
   // Cache lazily fetched L2/L3 so a term opens instantly the next time.
-  function cacheExpansion(termId: number, l2: string, l3: string) {
+  function cacheExpansion(termId: number, l2: string | null, l3: string | null) {
     setTerms((prev) =>
-      prev.map((t) => (t.id === termId ? { ...t, l2, l3 } : t)),
+      prev.map((t) =>
+        t.id === termId ? { ...t, l2: l2 ?? t.l2, l3: l3 ?? t.l3 } : t,
+      ),
     );
   }
 
@@ -801,7 +803,7 @@ function DigestCard({
   digest: LiveDigest;
   termsById: Map<number, LiveTerm>;
   showOriginal: boolean;
-  onTermExpanded: (termId: number, l2: string, l3: string) => void;
+  onTermExpanded: (termId: number, l2: string | null, l3: string | null) => void;
   onTermLearned: (termId: number) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
@@ -867,7 +869,7 @@ function MessageRow({
   message: LiveMessage;
   termsById: Map<number, LiveTerm>;
   showOriginal: boolean;
-  onTermExpanded: (termId: number, l2: string, l3: string) => void;
+  onTermExpanded: (termId: number, l2: string | null, l3: string | null) => void;
   onTermLearned: (termId: number) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
@@ -999,36 +1001,51 @@ function InlineTermCard({
   term: LiveTerm;
   messageId?: number; // omitted → L3 grounds in the term's latest sighting
   onClose: () => void;
-  onExpanded: (termId: number, l2: string, l3: string) => void;
+  onExpanded: (termId: number, l2: string | null, l3: string | null) => void;
   onLearned: (termId: number) => void;
 }) {
   const [open, setOpen] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [grounding, setGrounding] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const hasLong = !!term.l2 && !!term.l3;
+  const [l3Available, setL3Available] = useState(true);
 
+  async function expand(level?: "grounding") {
+    try {
+      const res = await fetch(api(`/api/terms/${term.id}/expand`), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ messageId, level }),
+      });
+      if (!res.ok) throw new Error(`expand failed (${res.status})`);
+      const data = await res.json();
+      setL3Available(data.l3Available);
+      onExpanded(term.id, data.l2, data.l3);
+    } catch (err) {
+      setError(String(err));
+    }
+  }
+
+  // Opening shows the SHARED basic explanation only (L1 + L2) — no per-user
+  // AI spend. The in-context layer is behind an explicit button below.
   async function toggleLong() {
     const next = !open;
     setOpen(next);
     setError(null);
     if (next) onLearned(term.id);
-    if (next && !hasLong && !loading) {
+    if (next && !term.l2 && !loading) {
       setLoading(true);
-      try {
-        const res = await fetch(api(`/api/terms/${term.id}/expand`), {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ messageId }),
-        });
-        if (!res.ok) throw new Error(`expand failed (${res.status})`);
-        const data = await res.json();
-        onExpanded(term.id, data.l2, data.l3);
-      } catch (err) {
-        setError(String(err));
-      } finally {
-        setLoading(false);
-      }
+      await expand();
+      setLoading(false);
     }
+  }
+
+  async function loadGrounding() {
+    if (grounding) return;
+    setGrounding(true);
+    setError(null);
+    await expand("grounding");
+    setGrounding(false);
   }
 
   const c = domainColor(term.domain);
@@ -1045,29 +1062,44 @@ function InlineTermCard({
           <p className="mt-0.5 text-sm leading-relaxed text-neutral-300">
             {term.l1}
           </p>
-          {!open && (
-            <p className="mt-1 text-xs text-neutral-500">in this context ▸</p>
-          )}
+          {!open && <p className="mt-1 text-xs text-neutral-500">more ▸</p>}
         </button>
-        {/* opened: the long, in-context explanation */}
+        {/* opened: shared basic concept, then the opt-in in-context layer */}
         {open && (
           <div className="border-t border-white/[0.06] px-3.5 py-3 text-sm leading-relaxed">
-          {error ? (
-            <p className="text-red-400/90">couldn&apos;t load — {error}</p>
-          ) : !hasLong ? (
-            <div className="animate-pulse space-y-2" aria-label="loading">
-              <div className="h-3 w-full rounded bg-neutral-800" />
-              <div className="h-3 w-5/6 rounded bg-neutral-800" />
-            </div>
-          ) : (
-            <>
-              <p className="text-neutral-100">{term.l3}</p>
-              <p className="mt-2 text-neutral-400">{term.l2}</p>
-            </>
-          )}
+            {error && <p className="text-red-400/90">couldn&apos;t load — {error}</p>}
+            {loading ? (
+              <div className="animate-pulse space-y-2" aria-label="loading">
+                <div className="h-3 w-full rounded bg-neutral-800" />
+                <div className="h-3 w-5/6 rounded bg-neutral-800" />
+              </div>
+            ) : term.l2 ? (
+              <p className="text-neutral-200">{term.l2}</p>
+            ) : !error ? (
+              <p className="text-neutral-500">no deeper explanation available on this server</p>
+            ) : null}
+            {term.l3 ? (
+              <div className="mt-3 border-t border-white/[0.06] pt-2">
+                <p className="text-[10px] uppercase tracking-widest text-neutral-500">in your sessions</p>
+                <p className="mt-1 text-neutral-100">{term.l3}</p>
+              </div>
+            ) : grounding ? (
+              <div className="mt-3 animate-pulse space-y-2" aria-label="loading in-context">
+                <div className="h-3 w-full rounded bg-neutral-800" />
+                <div className="h-3 w-4/6 rounded bg-neutral-800" />
+              </div>
+            ) : l3Available ? (
+              <button
+                onClick={loadGrounding}
+                className="mt-3 rounded-md border border-neutral-700 px-2 py-1 text-xs text-neutral-400 hover:text-neutral-100"
+                title="reads this term's message from your stream and explains it in your context — costs one AI call"
+              >
+                explain in my sessions · 1 AI call
+              </button>
+            ) : null}
             <button
               onClick={onClose}
-              className="mt-2 text-xs text-neutral-500 hover:text-neutral-300"
+              className="mt-2 block text-xs text-neutral-500 hover:text-neutral-300"
             >
               close ✕
             </button>
@@ -1190,7 +1222,7 @@ function ChipBoard({
 }: {
   terms: LiveTerm[];
   freshTermIds: Set<number>;
-  onExpanded: (termId: number, l2: string, l3: string) => void;
+  onExpanded: (termId: number, l2: string | null, l3: string | null) => void;
   onLearned: (termId: number) => void;
 }) {
   const [activeTermId, setActiveTermId] = useState<number | null>(null);

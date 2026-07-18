@@ -104,7 +104,11 @@ export default function Wiki() {
                   term={t}
                   onExpanded={(l2, l3) =>
                     setTerms((prev) =>
-                      prev.map((x) => (x.id === t.id ? { ...x, l2, l3 } : x)),
+                      prev.map((x) =>
+                        x.id === t.id
+                          ? { ...x, l2: l2 ?? x.l2, l3: l3 ?? x.l3 }
+                          : x,
+                      ),
                     )
                   }
                 />
@@ -122,31 +126,48 @@ function TermRow({
   onExpanded,
 }: {
   term: WikiTerm;
-  onExpanded: (l2: string, l3: string) => void;
+  onExpanded: (l2: string | null, l3: string | null) => void;
 }) {
   const [open, setOpen] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [grounding, setGrounding] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [l3Available, setL3Available] = useState(true);
 
+  async function expand(level?: "grounding") {
+    setError(null);
+    try {
+      const res = await fetch(api(`/api/terms/${t.id}/expand`), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ level }),
+      });
+      if (!res.ok) throw new Error(`expand failed (${res.status})`);
+      const data = await res.json();
+      setL3Available(data.l3Available);
+      onExpanded(data.l2, data.l3);
+    } catch (err) {
+      setError(String(err));
+    }
+  }
+
+  // Opening shows the shared basic explanation (L1 + L2) only; the
+  // in-context layer costs one AI call and is behind an explicit button.
   async function toggle() {
     const next = !open;
     setOpen(next);
-    if (next && (!t.l2 || !t.l3) && !loading) {
+    if (next && !t.l2 && !loading) {
       setLoading(true);
-      setError(null);
-      try {
-        const res = await fetch(api(`/api/terms/${t.id}/expand`), {
-          method: "POST",
-        });
-        if (!res.ok) throw new Error(`expand failed (${res.status})`);
-        const data = await res.json();
-        onExpanded(data.l2, data.l3);
-      } catch (err) {
-        setError(String(err));
-      } finally {
-        setLoading(false);
-      }
+      await expand();
+      setLoading(false);
     }
+  }
+
+  async function loadGrounding() {
+    if (grounding) return;
+    setGrounding(true);
+    await expand("grounding");
+    setGrounding(false);
   }
 
   return (
@@ -169,12 +190,19 @@ function TermRow({
         <div className="border-t border-neutral-800 px-3 py-3 text-sm leading-relaxed">
           <p className="text-neutral-200">{t.l1}</p>
           <Layer title="What it is" body={t.l2} loading={loading} error={error} />
-          <Layer
-            title="In your sessions"
-            body={t.l3}
-            loading={loading}
-            error={error}
-          />
+          {t.l3 ? (
+            <Layer title="In your sessions" body={t.l3} loading={false} error={null} />
+          ) : grounding ? (
+            <Layer title="In your sessions" body={null} loading={true} error={error} />
+          ) : l3Available ? (
+            <button
+              onClick={loadGrounding}
+              className="mt-3 rounded-md border border-neutral-700 px-2 py-1 text-xs text-neutral-400 hover:text-neutral-100"
+              title="reads this term's message from your stream and explains it in your context — costs one AI call"
+            >
+              explain in my sessions · 1 AI call
+            </button>
+          ) : null}
         </div>
       )}
     </div>

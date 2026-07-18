@@ -194,6 +194,14 @@ spend teaches everyone.
   message (was: first 80 globally) — dedupe stays correct as the glossary
   grows. L2 expansions were already shared (cached on the term row); L1 is
   first-seen-wins, so later re-extractions never overwrite.
+- **Term cards default to the shared basic explanation only** (L1 + L2 —
+  generic, cached once globally, no per-user AI spend). The in-context L3
+  requires querying the user's own stream with AI, so it is strictly opt-in:
+  an "explain in my sessions · 1 AI call" button sends
+  `POST /api/terms/:id/expand {level:"grounding"}`; a cached L3 returns
+  free. The response carries `l3Available` (false on a no-key server, which
+  also cannot generate L2 — routing expansions through the collector work
+  queue is the noted next step for no-key deployments).
 - **Privacy boundary (enforced, not prompt-only —
   `drizzle/0006_private_keywords.sql`):** only generic vocabulary
   ("term"/"initial" kinds, `terms.user_id NULL`) is shared. "keyword" terms
