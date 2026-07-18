@@ -127,3 +127,32 @@ machine → run the collector once. The collector already watches local Claude
 and Codex transcript directories and can discover existing local JSONL files;
 cloud-only sessions remain out of scope unless their provider exposes a
 separate, consented export/API integration.
+
+## 11. Current collector safety and progress work (July 18, 2026)
+
+- Latest source commits: `1c742af` adds the central import-progress card;
+  `01ee3c3`/`f146860` add the local-AI budget; `e4ac375`/`69f1809` change
+  history processing to wait for the next budget window instead of marking
+  remaining history as skipped. Collector release `v0.1.3` is published.
+- Local translation is shared by **both Claude Code and Codex transcripts**
+  and every supported collector binary (macOS/Linux × amd64/arm64). The
+  release workflow now runs `go test ./...` before building all four targets.
+- The local budget is persisted at `~/.local/state/unjargond/ai-budget.json`:
+  no more than 30 local AI subprocesses, each killed after 30 seconds, in a
+  rolling five-hour window (15 minutes / 5% runtime). It also covers digest
+  work. This controls executable time, not a provider-reported token meter.
+- **Do not claim the UI ETA is implemented.** The current `/live` progress
+  card only detects recent ingestion and hides after one minute. It cannot
+  distinguish a completed import from a collector paused for the AI budget.
+
+### Required next implementation: truthful import status and ETA
+
+Build a persisted, globally chronological collector work queue. It must first
+inventory assistant messages from both `~/.claude/projects` and
+`~/.codex/sessions`, then retain `total`, `completed`, current rate, and the
+next budget-reset time across service restarts. Publish that status through an
+authenticated collector endpoint; store it per device/user in Postgres; return
+it from `/api/bootstrap`; then show `completed / total`, paused-until, and an
+ETA in `/live`. Never use an ETA inferred solely from the most-recent uploaded
+message. Keep raw history visible immediately, but do not permanently skip
+jargon extraction merely because a budget window is exhausted.
