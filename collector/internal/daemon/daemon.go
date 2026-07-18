@@ -265,9 +265,7 @@ func (d *Daemon) track(path string, fromHook bool) {
 	}
 	var offset int64
 	var existingSize int64
-	existing := false
 	if st, err := os.Stat(path); err == nil {
-		existing = st.ModTime().Before(d.started)
 		existingSize = st.Size()
 	}
 	if saved, ok := d.offsets.get(path); ok {
