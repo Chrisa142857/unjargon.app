@@ -40,6 +40,15 @@ type budgetUse struct {
 	At time.Time `json:"at"`
 }
 
+// ErrBudgetWait means the local AI budget is spent. Callers must not block:
+// they ship raw / stop claiming work and retry after Until — the server keeps
+// untranslated messages queued, so nothing is permanently skipped.
+type ErrBudgetWait struct{ Until time.Time }
+
+func (e *ErrBudgetWait) Error() string {
+	return fmt.Sprintf("local AI budget spent until %s", e.Until.Format(time.RFC3339))
+}
+
 // budget reserves one worst-case CLI call before it starts. Persisting it
 // means restarting the collector cannot accidentally bypass the limit.
 type budget struct {
@@ -76,6 +85,25 @@ func (b *budget) reserve() time.Duration {
 	data, _ := json.Marshal(b.uses)
 	_ = os.WriteFile(b.path, data, 0o600)
 	return 0
+}
+
+// status reports calls used in the current window and when the oldest use
+// rolls out of it (zero time when the window is empty).
+func (b *budget) status() (used int, resetAt time.Time) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	cutoff := time.Now().Add(-budgetWindow)
+	kept := b.uses[:0]
+	for _, use := range b.uses {
+		if use.At.After(cutoff) {
+			kept = append(kept, use)
+		}
+	}
+	b.uses = kept
+	if len(b.uses) == 0 {
+		return 0, time.Time{}
+	}
+	return len(b.uses), b.uses[0].At.Add(budgetWindow)
 }
 
 type Translator struct {
@@ -142,28 +170,18 @@ func (t *Translator) Describe() string {
 
 // Notice is the transparency banner logged at startup.
 func (t *Translator) Notice() string {
-	return "local-translate mode ON: unjargon makes at most 30 short AI calls per 5 hours, then waits\n" +
+	return "local-translate mode ON: unjargon makes at most 30 short AI calls per 5 hours\n" +
 		"  using YOUR credentials via: " + t.Describe() + "\n" +
-		"  This reserves at most 15 minutes (5%) of local AI runtime. Disable with -local-translate=off\n" +
-		"  (translation then happens server-side if the server has an API key)."
+		"  This reserves at most 15 minutes (5%) of local AI runtime. Beyond the cap, messages\n" +
+		"  upload raw immediately and are explained later, oldest first, as budget frees.\n" +
+		"  Disable with -local-translate=off (the server then translates if it has an API key)."
 }
 
 // Translate runs one message through the user's AI CLI. Errors are returned
-// so the caller can leave msg.Translation nil (server-side fallback).
+// so the caller can leave msg.Translation nil (the message ships raw and the
+// server queues it for the translate-work loop).
 func (t *Translator) Translate(msg *parse.AgentMessage) error {
-	if strings.TrimSpace(msg.Text) == "" || len(strings.TrimSpace(msg.Text)) < trivialLength {
-		msg.Translation = &parse.Translation{Skip: true}
-		return nil
-	}
-	tmpl, err := t.fetchTemplate()
-	if err != nil {
-		return fmt.Errorf("fetch prompt template: %w", err)
-	}
-	out, err := t.Complete(strings.Replace(tmpl, "{{MESSAGE}}", msg.Text, 1))
-	if err != nil {
-		return err
-	}
-	result, err := extractTranslation([]byte(out))
+	result, err := t.TranslateText(msg.Text)
 	if err != nil {
 		return err
 	}
@@ -171,12 +189,36 @@ func (t *Translator) Translate(msg *parse.AgentMessage) error {
 	return nil
 }
 
+// TranslateText translates one message text — also the work-queue path, where
+// the text comes back from the server (already redacted before it was shipped).
+func (t *Translator) TranslateText(text string) (*parse.Translation, error) {
+	if len(strings.TrimSpace(text)) < trivialLength {
+		return &parse.Translation{Skip: true}, nil
+	}
+	tmpl, err := t.fetchTemplate()
+	if err != nil {
+		return nil, fmt.Errorf("fetch prompt template: %w", err)
+	}
+	out, err := t.Complete(strings.Replace(tmpl, "{{MESSAGE}}", text, 1))
+	if err != nil {
+		return nil, err
+	}
+	return extractTranslation([]byte(out))
+}
+
+// BudgetStatus reports local AI budget state for /api/status: calls used in
+// the rolling window, the cap, and when the oldest call rolls out.
+func (t *Translator) BudgetStatus() (used, limit int, resetAt time.Time) {
+	used, resetAt = t.budget.status()
+	return used, int(budgetLimit / callTimeout), resetAt
+}
+
 // Complete runs an arbitrary prompt through the user's AI CLI and returns the
 // raw output (a claude-style JSON envelope or bare text). Used for digest
 // work fetched from the server.
 func (t *Translator) Complete(prompt string) (string, error) {
-	for wait := t.budget.reserve(); wait > 0; wait = t.budget.reserve() {
-		time.Sleep(wait)
+	if wait := t.budget.reserve(); wait > 0 {
+		return "", &ErrBudgetWait{Until: time.Now().Add(wait)}
 	}
 	args := append([]string(nil), t.Command[1:]...)
 	if t.Command[0] == "claude" && t.Model != "" {

@@ -1,9 +1,11 @@
 package aicli
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func TestBudgetCapsFiveHourWindowAcrossRestarts(t *testing.T) {
@@ -22,6 +24,28 @@ func TestBudgetCapsFiveHourWindowAcrossRestarts(t *testing.T) {
 	}
 	if newBudget(state).reserve() <= 0 {
 		t.Fatal("restart bypassed budget")
+	}
+}
+
+func TestCompleteReturnsBudgetWaitWithoutBlocking(t *testing.T) {
+	tr := &Translator{Command: []string{"true"}, budget: newBudget(t.TempDir())}
+	for range 30 {
+		tr.budget.reserve()
+	}
+	start := time.Now()
+	_, err := tr.Complete("prompt")
+	var wait *ErrBudgetWait
+	if !errors.As(err, &wait) {
+		t.Fatalf("want ErrBudgetWait, got %v", err)
+	}
+	if time.Since(start) > time.Second {
+		t.Fatal("Complete blocked instead of returning on an exhausted budget")
+	}
+	if !wait.Until.After(time.Now()) {
+		t.Fatalf("Until must be in the future, got %s", wait.Until)
+	}
+	if used, limit, reset := tr.BudgetStatus(); used != 30 || limit != 30 || reset.IsZero() {
+		t.Fatalf("BudgetStatus() = %d/%d reset %s", used, limit, reset)
 	}
 }
 
