@@ -134,7 +134,9 @@ export const annotations = pgTable("annotations", {
   termId: integer("term_id").references(() => terms.id),
 });
 
-// Where a term was seen ("seen in 4 sessions on 2 machines").
+// Where a term was seen ("seen in 4 sessions on 2 machines"). Written both
+// by translation results and by the no-AI shared-glossary matcher at ingest —
+// the unique index keeps the two paths from double-counting.
 export const termSightings = pgTable("term_sightings", {
   id: serial("id").primaryKey(),
   termId: integer("term_id")
@@ -143,7 +145,7 @@ export const termSightings = pgTable("term_sightings", {
   messageId: integer("message_id")
     .notNull()
     .references(() => messages.id),
-});
+}, (t) => [uniqueIndex("term_sightings_term_message").on(t.termId, t.messageId)]);
 
 // Single-user key/value settings (calibration level etc.); becomes per-user
 // when auth lands.

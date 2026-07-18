@@ -177,6 +177,34 @@ Verified end-to-end locally: no-key server queues → chronological claim
 CLI, delivers, reports status → bootstrap and the `/live` card show 5/7 with
 paused-until + ETA. `go test ./...`, `tsc --noEmit`, and eslint pass.
 
+### Shared jargon knowledge base (July 18, 2026)
+
+The single backend's glossary is a cross-user knowledge base that saves AI
+credit: `terms` rows (generic L1/L2) are global, so one user's extraction
+spend teaches everyone.
+
+- **Zero-AI matching at ingest** (`web/src/lib/glossary.ts`): every ingested
+  message is matched against the shared glossary (SQL `position()` +
+  word-boundary check); sightings are recorded immediately, so known terms
+  appear on a user's board before any translation — even budget-paused or
+  with no AI CLI. A unique index on `term_sightings(term_id, message_id)`
+  (`drizzle/0005_shared_glossary.sql`) keeps this and the translation path
+  from double-counting.
+- Server translation prompts now list exactly the known terms present in the
+  message (was: first 80 globally) — dedupe stays correct as the glossary
+  grows. L2 expansions were already shared (cached on the term row); L1 is
+  first-seen-wins, so later re-extractions never overwrite.
+- What stays private per user: which messages/sessions sighted a term
+  (owner-filtered reads), and L3/learned in `user_terms`. Only the generic
+  explanation crosses users. Note the flip side: a term name + generic L1
+  extracted from one user's transcript is visible to any user whose own text
+  mentions the same string — the extraction prompt keeps L1 generic, which is
+  the safeguard; revisit if project-specific "keyword" terms prove leaky.
+- Verified: user B ingested a raw message mentioning terms user A had paid
+  for — B's board showed them with A's L1s at zero AI spend; a later
+  translation re-emitting the term neither duplicated the sighting nor
+  overwrote the L1.
+
 Deliberate ceiling: the collector does not pre-count assistant messages
 before shipping — raw shipping has no AI cost, so the server total stabilizes
 within minutes of install and stays truthful; add a local pre-inventory only

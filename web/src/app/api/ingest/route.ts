@@ -3,6 +3,7 @@ import { db, tables } from "@/db";
 import { deviceForRequest } from "@/lib/auth";
 import { publish } from "@/lib/bus";
 import { scheduleDigestCheck } from "@/lib/digest";
+import { recordKnownSightings } from "@/lib/glossary";
 import {
   scheduleTranslation,
   storeProvidedTranslation,
@@ -77,6 +78,10 @@ export async function POST(req: Request) {
       })),
     )
     .returning();
+
+  // Shared-glossary pass (no AI): terms other users already paid to extract
+  // surface on this user's board immediately, even before any translation.
+  await recordKnownSightings(stored);
 
   for (const row of stored) {
     publish({

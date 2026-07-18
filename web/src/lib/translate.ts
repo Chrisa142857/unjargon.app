@@ -3,6 +3,7 @@ import { and, asc, eq, inArray, isNull, lt } from "drizzle-orm";
 import { db, tables } from "@/db";
 import { publish } from "@/lib/bus";
 import { scheduleDigestCheck, serverCanLLM } from "@/lib/digest";
+import { termsInText } from "@/lib/glossary";
 import {
   TRANSLATION_MODEL,
   translationSystemPrompt,
@@ -271,11 +272,9 @@ async function callTranslator(
     .where(eq(tables.sessions.id, msg.sessionId));
   const projectName = session?.cwd?.split("/").filter(Boolean).pop() ?? null;
 
-  // Known terms for dedupe (single-user MVP: the whole glossary, capped).
-  const known = await db
-    .select({ term: tables.terms.term })
-    .from(tables.terms)
-    .limit(80);
+  // Known terms for dedupe: exactly the shared-glossary terms present in
+  // this message (stays correct as the shared glossary grows past any cap).
+  const known = await termsInText(msg.text);
 
   const client = new Anthropic();
   const resp = await client.messages.create({
@@ -357,7 +356,9 @@ async function storeResult(
       }
       await db
         .insert(tables.termSightings)
-        .values({ termId: row.id, messageId: msg.id });
+        .values({ termId: row.id, messageId: msg.id })
+        .onConflictDoNothing(); // the ingest glossary matcher may have won
+
     }
 
     for (const a of result.annotations ?? []) {
