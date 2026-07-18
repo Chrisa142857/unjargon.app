@@ -204,8 +204,16 @@ spend teaches everyone.
   `GET /api/prompt` template bakes in shared vocabulary only. L2 generation
   is a separate snippet-free call (`conceptTool`) so no transcript content
   can reach the shared row; L3 keeps the user's own source snippet and is
-  cached per-user (`user_terms`), with `expandTerm` returning 404 for
-  another user's keyword. Sightings/sessions remain owner-filtered.
+  cached per-user (`user_terms`), with `expandTerm` and the learned route
+  returning 404 for another user's keyword. Sightings/sessions remain
+  owner-filtered. Further mechanical guards (July 18): artifact-shaped
+  strings (paths, files, dotted modules) are forced to kind "keyword"
+  regardless of the model's label; a would-be-shared term whose L1/domain
+  mentions the project name or a slash path is demoted to a user-owned row
+  (`looksProjectSpecific` in translate.ts); the translation prompts state
+  that L1/domain are shown to other users and must stay generic;
+  `drizzle/0007_leak_cleanup.sql` scrubs any pre-0006 cross-user sightings,
+  user_terms rows, and annotation refs tied to now-private terms.
 - Verified: user B ingested a raw message mentioning terms user A had paid
   for — B's board showed them with A's L1s at zero AI spend; a later
   translation re-emitting the term neither duplicated the sighting nor

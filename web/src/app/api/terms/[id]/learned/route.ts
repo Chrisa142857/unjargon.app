@@ -17,8 +17,9 @@ export async function POST(
   if (!Number.isInteger(termId) || termId <= 0) {
     return Response.json({ error: "invalid term id" }, { status: 400 });
   }
-  const [term] = await db.select({ id: tables.terms.id }).from(tables.terms).where(eq(tables.terms.id, termId));
-  if (!term) {
+  const [term] = await db.select({ id: tables.terms.id, userId: tables.terms.userId }).from(tables.terms).where(eq(tables.terms.id, termId));
+  // Another user's private keyword is invisible — same 404 as expand.
+  if (!term || (term.userId !== null && term.userId !== user.id)) {
     return Response.json({ error: "term not found" }, { status: 404 });
   }
   const learnedAt = new Date();

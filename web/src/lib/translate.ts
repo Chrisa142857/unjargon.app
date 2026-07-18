@@ -231,16 +231,23 @@ function sanitize(result: TranslationResult, text: string): TranslationResult {
         typeof t.level1 === "string",
     )
     .slice(0, 6) // cap ~6 new terms/message
-    .map((t) => ({
-      ...t,
-      domain: t.domain?.trim() || "General",
-      salience: Math.min(1, Math.max(0, Number(t.salience) || 0.5)),
-      kind: (["keyword", "term", "initial"] as const).includes(
+    .map((t) => {
+      // Artifact-shaped strings (paths, files, dotted modules, commands) are
+      // ALWAYS "keyword" — i.e. private — regardless of the model's label.
+      // The model's kind is advisory; this boundary is mechanical.
+      const heuristic = inferKind(t.term);
+      const modelKind = (["keyword", "term", "initial"] as const).includes(
         t.kind as TermKind,
       )
         ? (t.kind as TermKind)
-        : inferKind(t.term),
-    }));
+        : null;
+      return {
+        ...t,
+        domain: t.domain?.trim() || "General",
+        salience: Math.min(1, Math.max(0, Number(t.salience) || 0.5)),
+        kind: heuristic === "keyword" ? heuristic : (modelKind ?? heuristic),
+      };
+    });
   const importance =
     result.importance === undefined
       ? 0.5
@@ -302,6 +309,20 @@ async function callTranslator(
   return block.input as TranslationResult;
 }
 
+// True when text mentions the session's project by name or contains a
+// slash-path token — markers that an explanation is about THIS project, not
+// the term in general, and must not reach the shared glossary.
+function looksProjectSpecific(text: string, projectName: string | null): boolean {
+  if (
+    projectName &&
+    projectName.length >= 4 &&
+    text.toLowerCase().includes(projectName.toLowerCase())
+  ) {
+    return true;
+  }
+  return /[A-Za-z0-9_.-]+\/[A-Za-z0-9_./-]+/.test(text);
+}
+
 async function storeResult(
   msg: typeof tables.messages.$inferSelect,
   result: TranslationResult,
@@ -310,6 +331,11 @@ async function storeResult(
   const subtitle = result.skip ? null : (result.subtitle ?? null);
   const importance = result.skip ? 0 : (result.importance ?? 0.5);
   const owner = await sessionUserId(msg.sessionId);
+  const [sess] = await db
+    .select({ cwd: tables.sessions.cwd })
+    .from(tables.sessions)
+    .where(eq(tables.sessions.id, msg.sessionId));
+  const projectName = sess?.cwd?.split("/").filter(Boolean).pop() ?? null;
 
   await db
     .update(tables.messages)
@@ -327,7 +353,11 @@ async function storeResult(
     for (const t of result.terms ?? []) {
       const key = t.term.trim().toLowerCase();
       const kind = t.kind ?? inferKind(t.term);
-      const termOwner = kind === "keyword" ? owner : null;
+      // Demotion backstop: a would-be-shared row whose explanation or domain
+      // embeds project specifics stays private to this user. The prompt asks
+      // for generic L1/domain; this enforces it mechanically.
+      const specific = looksProjectSpecific(`${t.domain} ${t.level1}`, projectName);
+      const termOwner = kind === "keyword" || specific ? owner : null;
       const inserted = await db
         .insert(tables.terms)
         .values({
