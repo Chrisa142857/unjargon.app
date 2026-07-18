@@ -80,6 +80,7 @@ umask 077
 cat > "$CONF_DIR/env" <<EOF
 UNJARGON_SERVER=$SERVER
 UNJARGON_TOKEN=$TOKEN
+UNJARGON_BACKFILL=all
 EOF
 echo "wrote $CONF_DIR/env"
 
@@ -164,7 +165,8 @@ RestartSec=5
 WantedBy=default.target
 EOF
   systemctl --user daemon-reload
-  systemctl --user enable --now unjargond.service
+  systemctl --user enable unjargond.service
+  systemctl --user restart unjargond.service
   echo "registered systemd --user service unjargond"
 else
   # HPC login node without a systemd user session.
@@ -174,6 +176,7 @@ fi
 echo
 echo "unjargon collector installed. Start (or continue) a Claude Code session"
 echo "on this machine, then open $SERVER/live — subtitles should appear."
+echo "Existing Claude Code and Codex sessions are imported once on this install."
 echo
 echo "AI usage notice: by default unjargond translates on THIS machine using"
 echo "your own AI CLI (claude -p, haiku) — about one extra lightweight AI call"

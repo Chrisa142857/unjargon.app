@@ -39,6 +39,7 @@ type Config struct {
 	Listen     string            // hook-notification address, e.g. 127.0.0.1:4577
 	StateDir   string            // offsets, offline queue, pid file
 	Interval   time.Duration     // poll interval
+	BackfillExisting bool         // import transcripts already present at install time
 }
 
 // tracked pairs a tailer with its per-file parser (formats like Codex carry
@@ -69,6 +70,16 @@ func New(cfg Config) (*Daemon, error) {
 	offsets, err := loadOffsets(filepath.Join(cfg.StateDir, "offsets.json"))
 	if err != nil {
 		return nil, err
+	}
+	if cfg.BackfillExisting {
+		marker := filepath.Join(cfg.StateDir, "backfill-v1.done")
+		if _, err := os.Stat(marker); errors.Is(err, os.ErrNotExist) {
+			offsets.reset()
+			if err := os.WriteFile(marker, []byte("done\n"), 0o600); err != nil {
+				return nil, err
+			}
+			log.Print("backfill: importing existing transcripts")
+		}
 	}
 	return &Daemon{
 		cfg:     cfg,
@@ -254,7 +265,7 @@ func (d *Daemon) track(path string, fromHook bool) {
 	var offset int64
 	if saved, ok := d.offsets.get(path); ok {
 		offset = saved
-	} else if !fromHook {
+	} else if !fromHook && !d.cfg.BackfillExisting {
 		if st, err := os.Stat(path); err == nil && st.ModTime().Before(d.started) {
 			offset = st.Size()
 		}
@@ -365,6 +376,12 @@ func (s *offsetStore) set(path string, offset int64) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.m[path] = offset
+}
+
+func (s *offsetStore) reset() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.m = map[string]int64{}
 }
 
 func (s *offsetStore) save() error {

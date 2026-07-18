@@ -171,6 +171,7 @@ func cmdRun(args []string) {
 	watch := fs.String("watch", envOr("UNJARGON_WATCH", defaultWatch), "comma-separated directories to scan for transcripts")
 	stateDir := fs.String("state", filepath.Join(stateHome(), "unjargond"), "state directory (offsets, offline queue, pid)")
 	interval := fs.Duration("interval", 2*time.Second, "poll interval")
+	backfill := fs.Bool("backfill", envOr("UNJARGON_BACKFILL", "off") == "all", "import existing transcripts once (env UNJARGON_BACKFILL=all)")
 	fs.Parse(args)
 
 	shipper := &ship.Shipper{ServerURL: *server, Token: *token, Device: *device}
@@ -238,6 +239,7 @@ func cmdRun(args []string) {
 		Listen:     *listen,
 		StateDir:   *stateDir,
 		Interval:   *interval,
+		BackfillExisting: *backfill,
 	})
 	if err != nil {
 		log.Fatal(err)

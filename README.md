@@ -108,6 +108,8 @@ told the exact transcript path the moment a session starts — directory watchin
 of `~/.claude/projects/**` remains as fallback), and starts `unjargond` as a
 user-level service: launchd on macOS, `systemd --user` on Linux, or a plain
 background process with a PID file on HPC login nodes without user sessions.
+It imports existing local Claude Code and Codex transcripts once, then tails
+new activity. A large history can use many local translation calls.
 
 Collector guarantees:
 
