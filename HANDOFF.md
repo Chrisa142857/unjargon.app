@@ -68,9 +68,15 @@ Definition of demo-done: two collectors (Mac laptop + Linux VM) feeding one `/li
   `NEXT_PUBLIC_API_BASE` from the `UNJARGON_API_BASE` repository variable; its
   fallback is the same Render URL.
 - **Frontend:** GitHub Pages deploys on every push to `main` via
-  `.github/workflows/pages.yml`. The `/live` empty state shows a centered,
-  copy-paste collector install command. Do not re-add a persistent top banner;
-  it was intentionally removed.
+  `.github/workflows/pages.yml`. Since Google sign-in landed, **the
+  authenticated app runs same-origin on the backend** (the session cookie is
+  SameSite=Lax, so cross-site fetches can never authenticate; there is
+  deliberately no CORS). The Pages site is the landing page whose sign-in
+  links point at the backend, and its static `/live`/`/wiki` pages bounce to
+  the backend origin on load (`bounceToApiOrigin` in `web/src/lib/api.ts`).
+  `.github/workflows/backend-check.yml` is a full wiring probe of both
+  deployments, run from GitHub's runners. Do not re-add a persistent top
+  banner; it was intentionally removed.
 - **Installer:** `install.sh` is served from GitHub raw content and downloads
   binaries from GitHub Releases. It prompts for a short-lived pairing code
   created by the signed-in user in `/live`; it never asks for a Render secret:

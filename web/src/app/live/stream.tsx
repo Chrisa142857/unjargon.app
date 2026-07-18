@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
-import { api, apiBase, apiBaseIsBuiltIn, setApiBase } from "@/lib/api";
+import { api, apiBase, apiBaseIsBuiltIn, bounceToApiOrigin, setApiBase } from "@/lib/api";
 import AccountMenu from "@/app/account-menu";
 
 export type LiveAnnotation = {
@@ -370,6 +370,7 @@ export default function LiveStream() {
   const [progress, setProgress] = useState<ImportProgress>({ messages: 0, translated: 0, ratePerHour: 0, pausedUntil: null, budgets: [], sessions: 0, firstMessageAt: null, lastMessageAt: null, lastImportedAt: null });
 
   useEffect(() => {
+    if (bounceToApiOrigin("/live")) return; // static build → the app runs on the backend
     let cancelled = false;
     (async () => {
       try {

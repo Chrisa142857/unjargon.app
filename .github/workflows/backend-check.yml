@@ -54,10 +54,9 @@ jobs:
           echo "--- OAuth start (needs GOOGLE_* env on Render) ---"
           code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 "$URL/api/auth/google") || code=000
           case "$code" in 30[127]) echo "OK   /api/auth/google redirects ($code)";; *) echo "WARN /api/auth/google → $code (check GOOGLE_CLIENT_ID/SECRET/AUTH_SECRET env)";; esac
-          echo "--- CORS for the Pages origin ---"
-          acao=$(curl -s -D - -o /dev/null --max-time 15 -H 'Origin: https://chrisa142857.github.io' "$URL/api/prompt" | tr -d '\r' | grep -i '^access-control-allow-origin:' || true)
-          echo "${acao:-<no ACAO header>}"
-          [ -n "$acao" ] && echo "OK   CORS header present" || { echo "FAIL no CORS header"; fail=1; }
+          # No CORS by design: sign-in is a SameSite=Lax cookie, so the
+          # authenticated app runs same-origin on the backend; the Pages
+          # site is a landing page that links here and /live bounces here.
           exit $fail
       - name: Probe Pages frontend bundle
         run: |
@@ -66,6 +65,10 @@ jobs:
           code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 "$BASE/live/") || code=000
           echo "GET /live/ → $code"
           [ "$code" = "200" ] || { echo "FAIL pages /live not served"; exit 1; }
+          # landing page must send sign-in to the backend (same-origin auth)
+          curl -s --max-time 15 "$BASE/" | grep -q 'unjargon.onrender.com/api/auth/google' \
+            && echo "OK   landing links sign-in to the backend" \
+            || { echo "FAIL landing missing backend sign-in link"; fail=1; }
           # collect the page's JS chunks and grep for current-feature markers
           curl -s --max-time 15 "$BASE/live/" -o live.html
           grep -oE '/unjargon\.app/_next/static/[^"]+\.js' live.html | sort -u > chunks.txt

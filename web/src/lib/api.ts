@@ -43,3 +43,21 @@ export function apiBaseIsBuiltIn(): boolean {
 export function api(path: string): string {
   return `${apiBase()}${path}`;
 }
+
+// Sign-in is a SameSite=Lax cookie, so the authenticated app must run on the
+// API's own origin — a static (GitHub Pages) build can't fetch it cross-site.
+// Pages like /live call this on mount: when the API lives elsewhere, the
+// browser is sent to the same page on the backend and this returns true.
+export function bounceToApiOrigin(path: string): boolean {
+  const base = apiBase();
+  if (!base) return false;
+  try {
+    if (new URL(base, window.location.href).origin === window.location.origin) {
+      return false;
+    }
+  } catch {
+    return false;
+  }
+  window.location.replace(`${base}${path}`);
+  return true;
+}

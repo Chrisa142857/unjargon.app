@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { api } from "@/lib/api";
+import { api, bounceToApiOrigin } from "@/lib/api";
 import AccountMenu from "@/app/account-menu";
 
 export type WikiTerm = {
@@ -25,6 +25,7 @@ export default function Wiki() {
   const [query, setQuery] = useState("");
 
   useEffect(() => {
+    if (bounceToApiOrigin("/wiki")) return; // static build → the app runs on the backend
     let cancelled = false;
     (async () => {
       try {
