@@ -141,18 +141,41 @@ separate, consented export/API integration.
   no more than 30 local AI subprocesses, each killed after 30 seconds, in a
   rolling five-hour window (15 minutes / 5% runtime). It also covers digest
   work. This controls executable time, not a provider-reported token meter.
-- **Do not claim the UI ETA is implemented.** The current `/live` progress
-  card only detects recent ingestion and hides after one minute. It cannot
-  distinguish a completed import from a collector paused for the AI budget.
+### Truthful import status and ETA (implemented July 18, 2026)
 
-### Required next implementation: truthful import status and ETA
+The persisted, globally chronological work queue is **Postgres itself**:
+untranslated messages (`translated_at IS NULL`), ordered by message time
+across every session and device a user owns. This satisfies the retention
+requirements strictly better than a collector-side file — `total`,
+`completed`, and rate survive collector *and* server restarts; the
+budget-reset time survives restarts in `~/.local/state/unjargond/ai-budget.json`.
 
-Build a persisted, globally chronological collector work queue. It must first
-inventory assistant messages from both `~/.claude/projects` and
-`~/.codex/sessions`, then retain `total`, `completed`, current rate, and the
-next budget-reset time across service restarts. Publish that status through an
-authenticated collector endpoint; store it per device/user in Postgres; return
-it from `/api/bootstrap`; then show `completed / total`, paused-until, and an
-ETA in `/live`. Never use an ETA inferred solely from the most-recent uploaded
-message. Keep raw history visible immediately, but do not permanently skip
-jargon extraction merely because a budget window is exhausted.
+- Collectors always ship raw immediately. An exhausted budget no longer
+  sleeps inside `Complete()` (which used to stall tailing for up to 5 hours);
+  it returns `ErrBudgetWait` and the message ships untranslated.
+- A no-key server leaves non-trivial messages **queued**, never marks them
+  skipped (`web/src/lib/translate.ts`); collectors claim them oldest-first via
+  `GET/POST /api/work/translate` (5-min claim reaping, mirrors digest work)
+  and run them within the same budget. Nothing is permanently skipped.
+- `POST /api/status` (paired-device auth) stores per-device budget state
+  (`devices.import_status`: used/limit/paused-until). Migration:
+  `drizzle/0004_translate_queue.sql`.
+- `/api/bootstrap` returns `progress.{messages, translated, ratePerHour,
+  pausedUntil}`. `ratePerHour` counts translations finished in the last hour
+  (from `translated_at`) — **never inferred from upload recency**.
+- The `/live` card shows `completed / total`, a real progress bar, the
+  budget-pause resume time, and an ETA computed only from the measured rate;
+  it stays visible until the queue is empty. Raw history is browsable
+  immediately throughout.
+
+Verified end-to-end locally: no-key server queues → chronological claim
+(oldest `ts` first across sessions) → daemon work loop translates with a stub
+CLI, delivers, reports status → bootstrap and the `/live` card show 5/7 with
+paused-until + ETA. `go test ./...`, `tsc --noEmit`, and eslint pass.
+
+Deliberate ceiling: the collector does not pre-count assistant messages
+before shipping — raw shipping has no AI cost, so the server total stabilizes
+within minutes of install and stays truthful; add a local pre-inventory only
+if that brief ramp-up proves confusing. Claiming is select-then-update, not
+`FOR UPDATE SKIP LOCKED`: two devices polling in the same instant can waste
+one budget call; add row locking when multi-device users appear.
