@@ -14,7 +14,6 @@ package aicli
 import (
 	"bytes"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -37,8 +36,6 @@ const callTimeout = 30 * time.Second
 const budgetWindow = 5 * time.Hour
 const budgetLimit = budgetWindow / 20 // 5% of a five-hour window
 
-var errBudget = errors.New("local AI budget reached")
-
 type budgetUse struct {
 	At time.Time `json:"at"`
 }
@@ -59,7 +56,7 @@ func newBudget(stateDir string) *budget {
 	return b
 }
 
-func (b *budget) reserve() bool {
+func (b *budget) reserve() time.Duration {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	cutoff := time.Now().Add(-budgetWindow)
@@ -73,12 +70,12 @@ func (b *budget) reserve() bool {
 	// Each process is capped at 30 seconds, so this reserves at most 15
 	// minutes (5%) of local AI runtime in every rolling five-hour window.
 	if time.Duration(len(b.uses)+1)*callTimeout > budgetLimit {
-		return false
+		return time.Until(b.uses[0].At.Add(budgetWindow))
 	}
 	b.uses = append(b.uses, budgetUse{At: time.Now()})
 	data, _ := json.Marshal(b.uses)
 	_ = os.WriteFile(b.path, data, 0o600)
-	return true
+	return 0
 }
 
 type Translator struct {
@@ -145,7 +142,7 @@ func (t *Translator) Describe() string {
 
 // Notice is the transparency banner logged at startup.
 func (t *Translator) Notice() string {
-	return "local-translate mode ON: unjargon makes at most 30 short AI calls per 5 hours\n" +
+	return "local-translate mode ON: unjargon makes at most 30 short AI calls per 5 hours, then waits\n" +
 		"  using YOUR credentials via: " + t.Describe() + "\n" +
 		"  This reserves at most 15 minutes (5%) of local AI runtime. Disable with -local-translate=off\n" +
 		"  (translation then happens server-side if the server has an API key)."
@@ -164,10 +161,6 @@ func (t *Translator) Translate(msg *parse.AgentMessage) error {
 	}
 	out, err := t.Complete(strings.Replace(tmpl, "{{MESSAGE}}", msg.Text, 1))
 	if err != nil {
-		if errors.Is(err, errBudget) {
-			msg.Translation = &parse.Translation{Skip: true}
-			return nil
-		}
 		return err
 	}
 	result, err := extractTranslation([]byte(out))
@@ -182,8 +175,8 @@ func (t *Translator) Translate(msg *parse.AgentMessage) error {
 // raw output (a claude-style JSON envelope or bare text). Used for digest
 // work fetched from the server.
 func (t *Translator) Complete(prompt string) (string, error) {
-	if !t.budget.reserve() {
-		return "", errBudget
+	for wait := t.budget.reserve(); wait > 0; wait = t.budget.reserve() {
+		time.Sleep(wait)
 	}
 	args := append([]string(nil), t.Command[1:]...)
 	if t.Command[0] == "claude" && t.Model != "" {

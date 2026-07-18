@@ -10,17 +10,17 @@ func TestBudgetCapsFiveHourWindowAcrossRestarts(t *testing.T) {
 	state := t.TempDir()
 	b := newBudget(state)
 	for i := 0; i < 30; i++ {
-		if !b.reserve() {
+		if b.reserve() != 0 {
 			t.Fatal("budget stopped before 5% limit")
 		}
 	}
-	if b.reserve() {
+	if b.reserve() <= 0 {
 		t.Fatal("budget exceeded 5% limit")
 	}
 	if _, err := os.Stat(filepath.Join(state, "ai-budget.json")); err != nil {
 		t.Fatalf("budget was not persisted: %v", err)
 	}
-	if newBudget(state).reserve() {
+	if newBudget(state).reserve() <= 0 {
 		t.Fatal("restart bypassed budget")
 	}
 }

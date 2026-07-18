@@ -20,6 +20,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -47,7 +48,6 @@ type Config struct {
 type tracked struct {
 	tailer           *tail.Tailer
 	parser           parse.Parser
-	skipInitialLocal bool // existing history must not spend local AI credits
 }
 
 type Daemon struct {
@@ -278,7 +278,6 @@ func (d *Daemon) track(path string, fromHook bool) {
 	d.tailers[path] = &tracked{
 		tailer: tail.NewAt(path, offset),
 		parser: parse.ForPath(path),
-		skipInitialLocal: d.cfg.BackfillExisting && !fromHook && existing,
 	}
 	src := "scan"
 	if fromHook {
@@ -297,6 +296,14 @@ func (d *Daemon) poll() {
 		paths = append(paths, p)
 	}
 	d.mu.Unlock()
+	sort.Slice(paths, func(i, j int) bool {
+		a, _ := os.Stat(paths[i])
+		b, _ := os.Stat(paths[j])
+		if a == nil || b == nil {
+			return paths[i] < paths[j]
+		}
+		return a.ModTime().Before(b.ModTime())
+	})
 
 	dirty := false
 	for _, path := range paths {
@@ -315,15 +322,7 @@ func (d *Daemon) poll() {
 				msgs = append(msgs, m)
 			}
 		}
-		if tr.skipInitialLocal {
-			for i := range msgs {
-				msgs[i].Translation = &parse.Translation{Skip: true}
-			}
-			if len(msgs) > 0 {
-				log.Printf("backfill: shipped %d historical message(s) without local AI", len(msgs))
-			}
-			tr.skipInitialLocal = false
-		} else if d.cfg.Translator != nil {
+		if d.cfg.Translator != nil {
 			for i := range msgs {
 				if err := d.cfg.Translator.Translate(&msgs[i]); err != nil {
 					// Ship untranslated; the server falls back if it can.
