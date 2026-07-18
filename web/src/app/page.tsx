@@ -1,19 +1,42 @@
 "use client";
 
-import Link from "next/link";
-import { useEffect, useState } from "react";
-import { api } from "@/lib/api";
+import { useState } from "react";
+
+const APP = "https://unjargon.onrender.com";
+const INSTALL = "curl -fsSL https://raw.githubusercontent.com/Chrisa142857/unjargon.app/main/install.sh | sh -s -- --server https://unjargon.onrender.com";
+
+function CopyCommand() {
+  const [copied, setCopied] = useState(false);
+  async function copy() {
+    await navigator.clipboard.writeText(INSTALL);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1800);
+  }
+  return <div className="mt-5 rounded-xl border border-white/10 bg-black/40 p-3 text-left shadow-2xl shadow-black/30">
+    <div className="flex items-center justify-between gap-3"><span className="text-xs text-neutral-500">macOS · Linux</span><button onClick={copy} className="rounded-md border border-white/10 px-2 py-1 text-xs text-neutral-300 hover:bg-white/10">{copied ? "Copied" : "Copy"}</button></div>
+    <code className="mt-2 block overflow-x-auto text-xs leading-6 text-emerald-200">$ {INSTALL}</code>
+  </div>;
+}
+
+function Feature({ title, children }: { title: string; children: React.ReactNode }) {
+  return <article className="rounded-2xl border border-white/10 bg-white/[0.035] p-6"><h3 className="font-medium text-white">{title}</h3><p className="mt-2 text-sm leading-6 text-neutral-400">{children}</p></article>;
+}
 
 export default function Home() {
-  const [signedIn, setSignedIn] = useState(false);
-  useEffect(() => { fetch(api("/api/auth/me")).then((r) => setSignedIn(r.ok)).catch(() => {}); }, []);
-  return (
-    <main className="flex min-h-dvh items-center justify-center bg-neutral-950 px-6 text-center text-neutral-300">
-      <div>
-        <p className="text-3xl font-semibold tracking-tight text-white">unjargon</p>
-        <p className="mt-3 max-w-md text-sm text-neutral-400">Plain-language subtitles for the AI agents working on your machine.</p>
-        <Link href={signedIn ? "/live" : "/api/auth/google"} className="mt-7 inline-block rounded-md bg-white px-4 py-2 font-medium text-neutral-950">{signedIn ? "Open your stream" : "Continue with Google"}</Link>
-      </div>
-    </main>
-  );
+  return <main className="min-h-dvh overflow-hidden bg-neutral-950 text-neutral-100">
+    <div className="pointer-events-none fixed inset-0 bg-[radial-gradient(60%_35%_at_50%_-5%,rgba(251,191,36,.16),transparent),radial-gradient(50%_30%_at_110%_55%,rgba(56,189,248,.10),transparent)]" />
+    <nav className="relative mx-auto flex max-w-6xl items-center px-6 py-5"><span className="font-semibold tracking-tight">unjargon</span><div className="ml-auto flex items-center gap-5 text-sm text-neutral-400"><a href="#how" className="hover:text-white">How it works</a><a href="#install" className="hover:text-white">Install</a><a href="https://github.com/Chrisa142857/unjargon.app" className="hover:text-white">GitHub</a><a href={`${APP}/api/auth/google`} className="rounded-md bg-white px-3 py-1.5 font-medium text-neutral-950">Sign in</a></div></nav>
+
+    <section className="relative mx-auto grid max-w-6xl gap-12 px-6 pb-24 pt-16 lg:grid-cols-[1.05fr_.95fr] lg:items-center lg:pt-24">
+      <div><p className="text-sm font-medium text-amber-200">Subtitles for your agents</p><h1 className="mt-4 max-w-2xl text-5xl font-semibold tracking-[-.045em] text-white sm:text-6xl">Keep your AI fast. Keep yourself in the loop.</h1><p className="mt-6 max-w-xl text-lg leading-8 text-neutral-400">unjargon turns the dense output from Claude Code and Codex into plain-language updates, with a glossary that explains the terms your work keeps teaching you.</p><div className="mt-8 flex flex-wrap gap-3"><a href={`${APP}/api/auth/google`} className="rounded-md bg-amber-200 px-4 py-2.5 font-medium text-neutral-950 hover:bg-amber-100">Start with Google</a><a href="#install" className="rounded-md border border-white/15 px-4 py-2.5 font-medium text-neutral-200 hover:bg-white/5">See install steps</a></div><p className="mt-4 text-xs text-neutral-500">Works beside your local CLI. No wrapper, no new terminal workflow.</p></div>
+      <div className="rounded-2xl border border-white/10 bg-neutral-900/80 p-4 shadow-2xl shadow-black/40"><div className="flex items-center gap-2 border-b border-white/10 px-2 pb-3 text-xs text-neutral-500"><span className="h-2 w-2 rounded-full bg-emerald-400" /> live · claude-code · sim-pipeline</div><div className="space-y-4 p-3"><div className="rounded-xl border border-amber-200/15 bg-amber-200/[.07] p-4"><p className="text-xs text-amber-200">plain language</p><p className="mt-2 text-sm leading-6 text-neutral-100">The agent switched to a solver that stays stable for this kind of simulation, so the crashes stop and the run should finish much faster.</p><p className="mt-3 text-xs text-neutral-500">original: “replace RK4 with BDF for stiff dynamics”</p></div><div className="flex flex-wrap gap-2"><span className="rounded-full border border-sky-300/25 bg-sky-300/10 px-3 py-1 text-xs text-sky-100">BDF · what it is</span><span className="rounded-full border border-violet-300/25 bg-violet-300/10 px-3 py-1 text-xs text-violet-100">stiff ODE · why here</span></div><p className="text-xs text-neutral-500">Your agent’s pace stays intact. Your understanding catches up.</p></div></div>
+    </section>
+
+    <section id="how" className="relative border-y border-white/[.08] bg-black/20"><div className="mx-auto max-w-6xl px-6 py-20"><p className="text-sm font-medium text-amber-200">A lighter kind of observability</p><h2 className="mt-3 max-w-2xl text-3xl font-semibold tracking-tight text-white">See what the agent means—not just what it said.</h2><div className="mt-10 grid gap-4 md:grid-cols-3"><Feature title="Readable updates">Every substantial assistant message gets a short, faithful translation. Numbers, failures, and filenames stay intact.</Feature><Feature title="Learn in context">Tap a term for a quick definition, then the explanation of why it matters in your session.</Feature><Feature title="Works where you work">A tiny collector watches local Claude Code and Codex transcript files on your Mac, Linux box, or remote machine.</Feature></div></div></section>
+
+    <section className="relative mx-auto max-w-6xl px-6 py-20"><div className="grid gap-10 lg:grid-cols-2"><div><p className="text-sm font-medium text-amber-200">Made for real agent work</p><h2 className="mt-3 text-3xl font-semibold tracking-tight text-white">For the moments when “done” isn’t an explanation.</h2><div className="mt-7 space-y-5 text-sm leading-6 text-neutral-400"><p><strong className="text-neutral-200">Vibe coding:</strong> understand a refactor, migration, or test failure before approving the next prompt.</p><p><strong className="text-neutral-200">Research & HPC:</strong> follow an agent’s simulation, data, or cluster work without becoming fluent in every acronym first.</p><p><strong className="text-neutral-200">Async collaboration:</strong> open the stream later and catch up through digest cards instead of rereading an opaque transcript.</p></div></div><div className="rounded-2xl border border-white/10 bg-white/[.035] p-6"><p className="text-xs font-medium uppercase tracking-[.16em] text-neutral-500">What stays private</p><p className="mt-4 text-sm leading-7 text-neutral-300">Your raw transcripts, project paths, message annotations, and session-specific explanations stay scoped to your account. Only generic term definitions are reused to reduce repeated explanation work.</p><p className="mt-5 text-sm text-neutral-500">Sign in, pair a machine, then run the collector. Your AI-provider login does not give unjargon access to local files.</p></div></div></section>
+
+    <section id="install" className="relative border-t border-white/[.08] bg-neutral-900/55"><div className="mx-auto max-w-3xl px-6 py-20 text-center"><p className="text-sm font-medium text-amber-200">Get started in three steps</p><h2 className="mt-3 text-3xl font-semibold tracking-tight text-white">One sign-in. One pairing code. One command.</h2><ol className="mt-10 space-y-5 text-left text-sm text-neutral-400"><li><span className="mr-3 inline-flex h-6 w-6 items-center justify-center rounded-full bg-white/10 text-xs text-white">1</span> <a className="text-white underline decoration-neutral-600 underline-offset-4" href={`${APP}/api/auth/google`}>Sign in to unjargon</a> with Google.</li><li><span className="mr-3 inline-flex h-6 w-6 items-center justify-center rounded-full bg-white/10 text-xs text-white">2</span> In your empty stream, choose <span className="text-white">Create pairing code</span>.</li><li><span className="mr-3 inline-flex h-6 w-6 items-center justify-center rounded-full bg-white/10 text-xs text-white">3</span> Run this on the Mac or Linux machine where Claude Code or Codex runs. Paste the pairing code when prompted.</li></ol><CopyCommand /><p className="mt-5 text-xs text-neutral-500">No root access. The installer downloads one static binary and registers a user-level service.</p><div className="mt-8 flex justify-center gap-3"><a href={`${APP}/api/auth/google`} className="rounded-md bg-amber-200 px-4 py-2.5 font-medium text-neutral-950">Open unjargon</a><a href="https://github.com/Chrisa142857/unjargon.app" className="rounded-md border border-white/15 px-4 py-2.5 font-medium text-neutral-200">View source</a></div></div></section>
+    <footer className="relative mx-auto flex max-w-6xl flex-wrap justify-between gap-3 px-6 py-8 text-xs text-neutral-500"><span>unjargon · subtitles for your agents</span><span>Claude Code and Codex are supported local transcript sources.</span></footer>
+  </main>;
 }
