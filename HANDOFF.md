@@ -117,11 +117,12 @@ accounts; do not add workspaces, memberships, or app-level admin roles until
 the product actually needs shared teams.
 
 1. Use managed Postgres before inviting users; bundled database storage is
-   ephemeral.
-2. Apply `0003_users.sql` (the container entrypoint does this on deploy).
-3. Remaining hardening: require owner checks on every legacy auxiliary route
-   (`/api/wiki`, digest detail, and local-work endpoints) before exposing them
-   to more than the owner.
+   ephemeral (it resets on every Render deploy).
+2. Apply the migrations in `drizzle/` (the container entrypoint applies all of
+   them on every deploy).
+3. ~~Remaining hardening: owner checks on legacy auxiliary routes~~ DONE
+   (July 18): `/api/wiki`, digest detail, settings, and every work endpoint
+   are owner- or device-scoped; verified by the deployed wiring probe.
 
 Add teams/workspaces, customer-facing admin screens, and provider OAuth only
 when a real customer requires them. The owner manages deployment, logs, and
@@ -136,10 +137,10 @@ separate, consented export/API integration.
 
 ## 11. Current collector safety and progress work (July 18, 2026)
 
-- Latest source commits: `1c742af` adds the central import-progress card;
-  `01ee3c3`/`f146860` add the local-AI budget; `e4ac375`/`69f1809` change
-  history processing to wait for the next budget window instead of marking
-  remaining history as skipped. Collector release `v0.1.3` is published.
+- Collector releases: `v0.1.4` (non-blocking budget + translate-work loop +
+  status reporting) and `v0.1.5` (expansion-work loop) are published;
+  machines installed earlier must re-run the install command — until they
+  do, their user's queued work sits unserved.
 - Local translation is shared by **both Claude Code and Codex transcripts**
   and every supported collector binary (macOS/Linux × amd64/arm64). The
   release workflow now runs `go test ./...` before building all four targets.
@@ -242,3 +243,42 @@ within minutes of install and stays truthful; add a local pre-inventory only
 if that brief ramp-up proves confusing. Claiming is select-then-update, not
 `FOR UPDATE SKIP LOCKED`: two devices polling in the same instant can waste
 one budget call; add row locking when multi-device users appear.
+
+## 12. Job log — July 18, 2026 session
+
+Everything below is on `main`, deployed (Pages + Render), and verified; each
+job's detail lives in the section noted. Migrations `0004`–`0008` shipped.
+
+1. **Truthful import status and ETA** (§11): chronological translate-work
+   queue in Postgres, non-blocking collector budget (`ErrBudgetWait` instead
+   of a tail-stalling sleep), `POST /api/status`, bootstrap progress
+   `{translated/messages, ratePerHour, pausedUntil}`, honest `/live` card.
+2. **AI budget always visible** (§11): persistent `AI used/limit` header
+   chip + "AI calls used (your credentials)" card line — unjargon spends the
+   user's own credentials, so usage is never hidden.
+3. **Shared jargon knowledge base** (§11): zero-AI glossary matching at
+   ingest; message-relevant known-terms dedupe in prompts; one user's L1/L2
+   spend teaches every user.
+4. **Privacy boundary on sharing** (§11): per-user keyword terms, snippet-free
+   shared-L2 generation, shared-vocabulary-only `/api/prompt`, mechanical
+   kind-override + project-specific demotion, historical cross-user link
+   cleanup (`0007`).
+5. **Cost model for cards** (§11): default card = shared basic explanation
+   (L1+L2, free after first generation); in-context L3 strictly opt-in
+   ("explain in my sessions · 1 AI call"), cached per user.
+6. **Expansion work queue** (§11): no-key servers queue L2/L3 requests;
+   the requester's collector serves them first in its work cycle; cards show
+   a queued state and poll. Collector `v0.1.5`.
+7. **Deployment wiring verified end to end** (§8): `backend-check.yml` is a
+   full probe of every endpoint's auth, build currency (prompt privacy-rules
+   marker), OAuth redirect, landing links, and Pages bundle markers — last
+   run fully green. Found and fixed the post-auth wart: static `/live`/`/wiki`
+   now bounce to the backend origin (same-origin cookie auth; no CORS by
+   design).
+
+Next when needed (no required next implementation is currently open):
+managed Postgres before inviting users (§10 — bundled DB resets per deploy);
+`FOR UPDATE SKIP LOCKED` claims when multi-device users appear; a local
+pre-inventory only if the post-install ramp-up confuses; authenticate
+`/api/prompt` (new collectors could send their device token) to serve
+per-user keyword dedupe in local-translate templates.
