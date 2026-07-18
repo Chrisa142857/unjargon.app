@@ -1,6 +1,29 @@
 package aicli
 
-import "testing"
+import (
+	"os"
+	"path/filepath"
+	"testing"
+)
+
+func TestBudgetCapsFiveHourWindowAcrossRestarts(t *testing.T) {
+	state := t.TempDir()
+	b := newBudget(state)
+	for i := 0; i < 30; i++ {
+		if !b.reserve() {
+			t.Fatal("budget stopped before 5% limit")
+		}
+	}
+	if b.reserve() {
+		t.Fatal("budget exceeded 5% limit")
+	}
+	if _, err := os.Stat(filepath.Join(state, "ai-budget.json")); err != nil {
+		t.Fatalf("budget was not persisted: %v", err)
+	}
+	if newBudget(state).reserve() {
+		t.Fatal("restart bypassed budget")
+	}
+}
 
 func TestExtractTranslation(t *testing.T) {
 	cases := []struct {

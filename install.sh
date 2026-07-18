@@ -81,6 +81,7 @@ cat > "$CONF_DIR/env" <<EOF
 UNJARGON_SERVER=$SERVER
 UNJARGON_TOKEN=$TOKEN
 UNJARGON_BACKFILL=all
+UNJARGON_LOCAL_TRANSLATE=auto
 EOF
 echo "wrote $CONF_DIR/env"
 
@@ -178,8 +179,8 @@ echo "unjargon collector installed. Start (or continue) a Claude Code session"
 echo "on this machine, then open $SERVER/live — subtitles should appear."
 echo "Existing Claude Code and Codex sessions are imported once on this install."
 echo
-echo "AI usage notice: by default unjargond translates on THIS machine using"
-echo "your own AI CLI (claude -p, haiku) — about one extra lightweight AI call"
-echo "per substantive agent message, on your existing subscription. To opt out:"
+echo "AI usage notice: existing history is shipped without AI calls. Live local"
+echo "translation is capped at 30 calls of at most 30 seconds per rolling 5 hours"
+echo "(15 minutes / 5% of local AI runtime). To opt out entirely:"
 echo "  echo 'UNJARGON_LOCAL_TRANSLATE=off' >> $CONF_DIR/env"
 echo "(the server then translates instead, if it has an ANTHROPIC_API_KEY)."

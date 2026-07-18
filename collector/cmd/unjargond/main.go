@@ -40,9 +40,10 @@ Common flags:
   -device NAME  device name shown in the UI (default hostname, env UNJARGON_DEVICE)
   -local-translate auto|on|off
                 translate on THIS machine using your own AI CLI (claude -p),
-                one extra headless AI call per agent message on your existing
-                subscription — no server API key needed. auto (default) turns
-                it on when the claude CLI is found. off = server translates.
+                capped at 30 calls of at most 30 seconds per rolling 5 hours
+                (15 minutes / 5% of local AI runtime). Existing history never
+                uses local AI. auto (default) turns it on when claude is found.
+                off = server translates.
                 (env UNJARGON_LOCAL_TRANSLATE, UNJARGON_TRANSLATE_MODEL,
                  UNJARGON_TRANSLATE_CMD)
 

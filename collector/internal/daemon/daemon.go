@@ -45,8 +45,9 @@ type Config struct {
 // tracked pairs a tailer with its per-file parser (formats like Codex carry
 // session metadata only on the first line, so parsers hold per-file state).
 type tracked struct {
-	tailer *tail.Tailer
-	parser parse.Parser
+	tailer           *tail.Tailer
+	parser           parse.Parser
+	skipInitialLocal bool // existing history must not spend local AI credits
 }
 
 type Daemon struct {
@@ -263,16 +264,21 @@ func (d *Daemon) track(path string, fromHook bool) {
 		return
 	}
 	var offset int64
+	existing := false
+	if st, err := os.Stat(path); err == nil {
+		existing = st.ModTime().Before(d.started)
+	}
 	if saved, ok := d.offsets.get(path); ok {
 		offset = saved
 	} else if !fromHook && !d.cfg.BackfillExisting {
-		if st, err := os.Stat(path); err == nil && st.ModTime().Before(d.started) {
+		if existing {
 			offset = st.Size()
 		}
 	}
 	d.tailers[path] = &tracked{
 		tailer: tail.NewAt(path, offset),
 		parser: parse.ForPath(path),
+		skipInitialLocal: d.cfg.BackfillExisting && !fromHook && existing,
 	}
 	src := "scan"
 	if fromHook {
@@ -309,7 +315,15 @@ func (d *Daemon) poll() {
 				msgs = append(msgs, m)
 			}
 		}
-		if d.cfg.Translator != nil {
+		if tr.skipInitialLocal {
+			for i := range msgs {
+				msgs[i].Translation = &parse.Translation{Skip: true}
+			}
+			if len(msgs) > 0 {
+				log.Printf("backfill: shipped %d historical message(s) without local AI", len(msgs))
+			}
+			tr.skipInitialLocal = false
+		} else if d.cfg.Translator != nil {
 			for i := range msgs {
 				if err := d.cfg.Translator.Translate(&msgs[i]); err != nil {
 					// Ship untranslated; the server falls back if it can.

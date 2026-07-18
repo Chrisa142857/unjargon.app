@@ -3,10 +3,9 @@
 // by spawning a fresh headless session of the user's own AI CLI
 // (`claude -p`) for each agent message.
 //
-// Transparency contract: this makes ONE extra lightweight AI call (haiku by
-// default) per translated agent message, billed to the user's existing
-// Claude subscription/account. It is announced at startup and can be turned
-// off with -local-translate=off (the server then translates if it has a key).
+// Transparency contract: live translation reuses the user's AI CLI, but is
+// capped at 5% of a five-hour local runtime window. It can be turned off with
+// -local-translate=off (the server then translates if it has a key).
 //
 // The prompt template is NOT hard-coded here — it is fetched from the web
 // app's GET /api/prompt, so all prompting stays in web/src/lib/prompts.ts.
@@ -15,6 +14,7 @@ package aicli
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -33,13 +33,60 @@ const trivialLength = 20
 // Short TTL: the template carries the server's current glossary and domain
 // labels (for dedupe), which grow as the session runs.
 const templateTTL = 30 * time.Second
-const callTimeout = 120 * time.Second
+const callTimeout = 30 * time.Second
+const budgetWindow = 5 * time.Hour
+const budgetLimit = budgetWindow / 20 // 5% of a five-hour window
+
+var errBudget = errors.New("local AI budget reached")
+
+type budgetUse struct {
+	At time.Time `json:"at"`
+}
+
+// budget reserves one worst-case CLI call before it starts. Persisting it
+// means restarting the collector cannot accidentally bypass the limit.
+type budget struct {
+	path string
+	mu   sync.Mutex
+	uses []budgetUse
+}
+
+func newBudget(stateDir string) *budget {
+	b := &budget{path: stateDir + "/ai-budget.json"}
+	if data, err := os.ReadFile(b.path); err == nil {
+		_ = json.Unmarshal(data, &b.uses)
+	}
+	return b
+}
+
+func (b *budget) reserve() bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	cutoff := time.Now().Add(-budgetWindow)
+	kept := b.uses[:0]
+	for _, use := range b.uses {
+		if use.At.After(cutoff) {
+			kept = append(kept, use)
+		}
+	}
+	b.uses = kept
+	// Each process is capped at 30 seconds, so this reserves at most 15
+	// minutes (5%) of local AI runtime in every rolling five-hour window.
+	if time.Duration(len(b.uses)+1)*callTimeout > budgetLimit {
+		return false
+	}
+	b.uses = append(b.uses, budgetUse{At: time.Now()})
+	data, _ := json.Marshal(b.uses)
+	_ = os.WriteFile(b.path, data, 0o600)
+	return true
+}
 
 type Translator struct {
 	ServerURL string
 	Command   []string // CLI invocation; the prompt is appended as final arg
 	Dir       string   // cwd for child sessions — see RecursionGuard
 	Model     string   // passed via --model when using the default claude CLI
+	budget    *budget
 
 	mu         sync.Mutex
 	template   string
@@ -68,7 +115,13 @@ func Detect(mode, serverURL, stateDir string) (*Translator, error) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, err
 	}
-	return &Translator{ServerURL: serverURL, Command: cmd, Dir: dir, Model: model}, nil
+	return &Translator{
+		ServerURL: serverURL,
+		Command:   cmd,
+		Dir:       dir,
+		Model:     model,
+		budget:    newBudget(stateDir),
+	}, nil
 }
 
 // commandFromEnv honors UNJARGON_TRANSLATE_CMD (space-separated command that
@@ -92,9 +145,9 @@ func (t *Translator) Describe() string {
 
 // Notice is the transparency banner logged at startup.
 func (t *Translator) Notice() string {
-	return "local-translate mode ON: unjargon will make one extra AI call per agent message\n" +
+	return "local-translate mode ON: unjargon makes at most 30 short AI calls per 5 hours\n" +
 		"  using YOUR credentials via: " + t.Describe() + "\n" +
-		"  This uses your existing AI subscription/quota. Disable with -local-translate=off\n" +
+		"  This reserves at most 15 minutes (5%) of local AI runtime. Disable with -local-translate=off\n" +
 		"  (translation then happens server-side if the server has an API key)."
 }
 
@@ -111,6 +164,10 @@ func (t *Translator) Translate(msg *parse.AgentMessage) error {
 	}
 	out, err := t.Complete(strings.Replace(tmpl, "{{MESSAGE}}", msg.Text, 1))
 	if err != nil {
+		if errors.Is(err, errBudget) {
+			msg.Translation = &parse.Translation{Skip: true}
+			return nil
+		}
 		return err
 	}
 	result, err := extractTranslation([]byte(out))
@@ -125,6 +182,9 @@ func (t *Translator) Translate(msg *parse.AgentMessage) error {
 // raw output (a claude-style JSON envelope or bare text). Used for digest
 // work fetched from the server.
 func (t *Translator) Complete(prompt string) (string, error) {
+	if !t.budget.reserve() {
+		return "", errBudget
+	}
 	args := append([]string(nil), t.Command[1:]...)
 	if t.Command[0] == "claude" && t.Model != "" {
 		args = append([]string{"--model", t.Model}, args...)
