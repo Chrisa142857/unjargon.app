@@ -137,12 +137,76 @@ func (d *Daemon) Run() error {
 			if d.cfg.Translator != nil && d.workBusy.CompareAndSwap(false, true) {
 				go func() {
 					defer d.workBusy.Store(false)
+					d.expandWork() // a user is actively waiting on these
 					d.translateWork()
 					d.digestWork()
 					d.reportStatus()
 				}()
 			}
 		}
+	}
+}
+
+// expandWork serves queued term-expansion requests (a user tapped "explain"
+// on a no-key server) with the user's own AI CLI. Runs before the history
+// backlog because someone is looking at the card right now.
+func (d *Daemon) expandWork() {
+	client := &http.Client{Timeout: 60 * time.Second}
+	for range 5 { // bounded per cycle
+		req, err := http.NewRequest(http.MethodGet, d.cfg.Shipper.ServerURL+"/api/work/expand", nil)
+		if err != nil {
+			return
+		}
+		req.Header.Set("Authorization", "Bearer "+d.cfg.Shipper.Token)
+		resp, err := client.Do(req)
+		if err != nil {
+			return
+		}
+		if resp.StatusCode != http.StatusOK {
+			resp.Body.Close()
+			return
+		}
+		var work struct {
+			ID     int    `json:"id"`
+			Prompt string `json:"prompt"`
+		}
+		err = json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&work)
+		resp.Body.Close()
+		if err != nil || work.ID == 0 || work.Prompt == "" {
+			return
+		}
+
+		out, err := d.cfg.Translator.Complete(work.Prompt)
+		if err != nil {
+			var wait *aicli.ErrBudgetWait
+			if errors.As(err, &wait) {
+				log.Printf("expand work: budget spent, resumes %s", wait.Until.Format(time.RFC3339))
+			} else {
+				log.Printf("expand work %d: AI call failed: %v", work.ID, err)
+			}
+			return // unposted claims expire server-side and are re-served
+		}
+		text, err := aicli.ExtractText(out)
+		if err != nil {
+			log.Printf("expand work %d: %v", work.ID, err)
+			return
+		}
+		body, _ := json.Marshal(map[string]string{"text": text})
+		post, err := http.NewRequest(http.MethodPost,
+			fmt.Sprintf("%s/api/work/expand/%d", d.cfg.Shipper.ServerURL, work.ID),
+			bytes.NewReader(body))
+		if err != nil {
+			return
+		}
+		post.Header.Set("Content-Type", "application/json")
+		post.Header.Set("Authorization", "Bearer "+d.cfg.Shipper.Token)
+		postResp, err := client.Do(post)
+		if err != nil {
+			log.Printf("expand work %d: deliver failed: %v", work.ID, err)
+			return
+		}
+		postResp.Body.Close()
+		log.Printf("expand work %d: explained and delivered", work.ID)
 	}
 }
 

@@ -1,4 +1,5 @@
 import {
+  boolean,
   integer,
   pgTable,
   real,
@@ -154,6 +155,20 @@ export const termSightings = pgTable("term_sightings", {
     .notNull()
     .references(() => messages.id),
 }, (t) => [uniqueIndex("term_sightings_term_message").on(t.termId, t.messageId)]);
+
+// Queued expansion work for no-key servers: a user asked for a term's L2
+// (grounding=false, shared once generated) or L3 (grounding=true, their own
+// in-context layer). Served to the requesting user's own collector, which
+// runs it within the local AI budget; the row is deleted on completion.
+export const expansionRequests = pgTable("expansion_requests", {
+  id: serial("id").primaryKey(),
+  termId: integer("term_id").notNull().references(() => terms.id),
+  userId: integer("user_id").notNull().references(() => users.id),
+  grounding: boolean("grounding").notNull().default(false),
+  messageId: integer("message_id"), // optional tapped-from source for L3
+  claimedAt: timestamp("claimed_at", { withTimezone: true }),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+}, (t) => [uniqueIndex("expansion_requests_unique").on(t.termId, t.userId, t.grounding)]);
 
 // Single-user key/value settings (calibration level etc.); becomes per-user
 // when auth lands.

@@ -243,9 +243,9 @@ func (t *Translator) Complete(prompt string) (string, error) {
 	return stdout.String(), nil
 }
 
-// ExtractSummary pulls {"summary": ...} out of CLI output (envelope, fenced,
-// or bare JSON) — the digest-work response format.
-func ExtractSummary(out string) (string, error) {
+// jsonObject strips a claude-CLI envelope and markdown fences, returning the
+// first {...} JSON object in the CLI output.
+func jsonObject(out string) (string, error) {
 	text := out
 	var envelope struct {
 		Result  string `json:"result"`
@@ -262,16 +262,45 @@ func ExtractSummary(out string) (string, error) {
 	if start < 0 || end <= start {
 		return "", fmt.Errorf("no JSON object in AI output: %.120q", text)
 	}
+	return text[start : end+1], nil
+}
+
+// ExtractSummary pulls {"summary": ...} out of CLI output — the digest-work
+// response format.
+func ExtractSummary(out string) (string, error) {
+	obj, err := jsonObject(out)
+	if err != nil {
+		return "", err
+	}
 	var body struct {
 		Summary string `json:"summary"`
 	}
-	if err := json.Unmarshal([]byte(text[start:end+1]), &body); err != nil {
+	if err := json.Unmarshal([]byte(obj), &body); err != nil {
 		return "", fmt.Errorf("bad digest JSON: %v", err)
 	}
 	if strings.TrimSpace(body.Summary) == "" {
 		return "", fmt.Errorf("empty digest summary")
 	}
 	return strings.TrimSpace(body.Summary), nil
+}
+
+// ExtractText pulls {"text": ...} out of CLI output — the expansion-work
+// response format.
+func ExtractText(out string) (string, error) {
+	obj, err := jsonObject(out)
+	if err != nil {
+		return "", err
+	}
+	var body struct {
+		Text string `json:"text"`
+	}
+	if err := json.Unmarshal([]byte(obj), &body); err != nil {
+		return "", fmt.Errorf("bad expansion JSON: %v", err)
+	}
+	if strings.TrimSpace(body.Text) == "" {
+		return "", fmt.Errorf("empty expansion text")
+	}
+	return strings.TrimSpace(body.Text), nil
 }
 
 // extractTranslation handles both a claude-CLI JSON envelope ({"result":

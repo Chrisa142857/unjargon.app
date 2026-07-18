@@ -1,5 +1,5 @@
 import Anthropic from "@anthropic-ai/sdk";
-import { and, desc, eq } from "drizzle-orm";
+import { and, asc, desc, eq, isNull, lt } from "drizzle-orm";
 import { db, tables } from "@/db";
 import {
   TRANSLATION_MODEL,
@@ -9,8 +9,10 @@ import {
   groundingSystemPrompt,
   groundingTool,
   groundingUserPrompt,
+  localConceptPrompt,
+  localGroundingPrompt,
 } from "@/lib/prompts";
-import { getCalibration } from "@/lib/settings";
+import { getCalibration, getUserCalibration } from "@/lib/settings";
 import { serverCanLLM } from "@/lib/digest";
 
 // Lazy L2/L3 generation. Two separate calls — a privacy AND cost boundary:
@@ -28,7 +30,13 @@ export async function expandTerm(
   userId: number,
   opts: { sourceMessageId?: number; grounding?: boolean } = {},
 ): Promise<
-  { l2: string | null; l3: string | null; l3Available: boolean } | null
+  | {
+      l2: string | null;
+      l3: string | null;
+      l3Available: boolean;
+      pending: { concept: boolean; grounding: boolean };
+    }
+  | null
 > {
   const [term] = await db
     .select()
@@ -38,66 +46,171 @@ export async function expandTerm(
   // Another user's private keyword: not visible, not expandable.
   if (term.userId !== null && term.userId !== userId) return null;
   const [profile] = await db.select().from(tables.userTerms).where(and(eq(tables.userTerms.userId, userId), eq(tables.userTerms.termId, termId)));
-  const l3Available = serverCanLLM();
+  const pending = { concept: false, grounding: false };
 
   let l2 = term.l2;
-  if (!l2 && serverCanLLM()) {
-    l2 = await callConcept({ term: term.term, domain: term.domain, l1: term.l1 });
-    await db.update(tables.terms).set({ l2 }).where(eq(tables.terms.id, termId));
+  if (!l2) {
+    if (serverCanLLM()) {
+      l2 = await callConcept({ term: term.term, domain: term.domain, l1: term.l1 });
+      await db.update(tables.terms).set({ l2 }).where(eq(tables.terms.id, termId));
+    } else {
+      // No-key server: queue for the user's own collector (idempotent).
+      await db
+        .insert(tables.expansionRequests)
+        .values({ termId, userId, grounding: false })
+        .onConflictDoNothing();
+      pending.concept = true;
+    }
   }
 
   // Cached L3 is free to return; generating one happens only on request.
   let l3 = profile?.l3 ?? null;
-  if (!l3 && opts.grounding && serverCanLLM()) {
-    const sourceMessageId = opts.sourceMessageId;
-    // Find the source message for grounding L3 (must belong to this user).
-    let source: { text: string; sessionId: number } | null = null;
-    if (sourceMessageId) {
-      const [m] = await db
-        .select({ text: tables.messages.text, sessionId: tables.messages.sessionId })
-        .from(tables.messages)
-        .innerJoin(tables.sessions, eq(tables.messages.sessionId, tables.sessions.id))
-        .innerJoin(tables.devices, eq(tables.sessions.deviceId, tables.devices.id))
-        .where(and(eq(tables.messages.id, sourceMessageId), eq(tables.devices.userId, userId)));
-      source = m ?? null;
+  if (!l3 && opts.grounding) {
+    if (serverCanLLM()) {
+      const src = await groundingSource(termId, userId, opts.sourceMessageId);
+      l3 = await callGrounding({
+        term: term.term,
+        domain: term.domain,
+        l1: term.l1,
+        ...src,
+      });
+      await db.insert(tables.userTerms).values({ userId, termId, l3 }).onConflictDoUpdate({ target: [tables.userTerms.userId, tables.userTerms.termId], set: { l3 } });
+    } else {
+      await db
+        .insert(tables.expansionRequests)
+        .values({ termId, userId, grounding: true, messageId: opts.sourceMessageId ?? null })
+        .onConflictDoNothing();
     }
-    if (!source) {
-      const [sighting] = await db
-        .select({ text: tables.messages.text, sessionId: tables.messages.sessionId })
-        .from(tables.termSightings)
-        .innerJoin(
-          tables.messages,
-          eq(tables.termSightings.messageId, tables.messages.id),
-        )
-        .innerJoin(tables.sessions, eq(tables.messages.sessionId, tables.sessions.id))
-        .innerJoin(tables.devices, eq(tables.sessions.deviceId, tables.devices.id))
-        .where(and(eq(tables.termSightings.termId, termId), eq(tables.devices.userId, userId)))
-        .orderBy(desc(tables.termSightings.id))
-        .limit(1);
-      source = sighting ?? null;
-    }
-
-    let projectName: string | null = null;
-    if (source) {
-      const [session] = await db
-        .select({ cwd: tables.sessions.cwd })
-        .from(tables.sessions)
-        .where(eq(tables.sessions.id, source.sessionId));
-      projectName = session?.cwd?.split("/").filter(Boolean).pop() ?? null;
-    }
-    const snippet = (source?.text ?? "(no source message recorded)").slice(0, SNIPPET_MAX);
-
-    l3 = await callGrounding({
-      term: term.term,
-      domain: term.domain,
-      l1: term.l1,
-      projectName,
-      snippet,
-    });
-    await db.insert(tables.userTerms).values({ userId, termId, l3 }).onConflictDoUpdate({ target: [tables.userTerms.userId, tables.userTerms.termId], set: { l3 } });
+  }
+  if (!l3) {
+    // Report an already-queued grounding request so the card can poll.
+    const [pend] = await db
+      .select({ id: tables.expansionRequests.id })
+      .from(tables.expansionRequests)
+      .where(
+        and(
+          eq(tables.expansionRequests.termId, termId),
+          eq(tables.expansionRequests.userId, userId),
+          eq(tables.expansionRequests.grounding, true),
+        ),
+      );
+    pending.grounding = !!pend;
   }
 
-  return { l2, l3, l3Available };
+  return { l2, l3, l3Available: true, pending };
+}
+
+// The source message grounding L3 (must belong to this user): the one they
+// tapped from when provided, else the term's most recent sighting.
+async function groundingSource(
+  termId: number,
+  userId: number,
+  sourceMessageId?: number,
+): Promise<{ projectName: string | null; snippet: string }> {
+  let source: { text: string; sessionId: number } | null = null;
+  if (sourceMessageId) {
+    const [m] = await db
+      .select({ text: tables.messages.text, sessionId: tables.messages.sessionId })
+      .from(tables.messages)
+      .innerJoin(tables.sessions, eq(tables.messages.sessionId, tables.sessions.id))
+      .innerJoin(tables.devices, eq(tables.sessions.deviceId, tables.devices.id))
+      .where(and(eq(tables.messages.id, sourceMessageId), eq(tables.devices.userId, userId)));
+    source = m ?? null;
+  }
+  if (!source) {
+    const [sighting] = await db
+      .select({ text: tables.messages.text, sessionId: tables.messages.sessionId })
+      .from(tables.termSightings)
+      .innerJoin(
+        tables.messages,
+        eq(tables.termSightings.messageId, tables.messages.id),
+      )
+      .innerJoin(tables.sessions, eq(tables.messages.sessionId, tables.sessions.id))
+      .innerJoin(tables.devices, eq(tables.sessions.deviceId, tables.devices.id))
+      .where(and(eq(tables.termSightings.termId, termId), eq(tables.devices.userId, userId)))
+      .orderBy(desc(tables.termSightings.id))
+      .limit(1);
+    source = sighting ?? null;
+  }
+
+  let projectName: string | null = null;
+  if (source) {
+    const [session] = await db
+      .select({ cwd: tables.sessions.cwd })
+      .from(tables.sessions)
+      .where(eq(tables.sessions.id, source.sessionId));
+    projectName = session?.cwd?.split("/").filter(Boolean).pop() ?? null;
+  }
+  return {
+    projectName,
+    snippet: (source?.text ?? "(no source message recorded)").slice(0, SNIPPET_MAX),
+  };
+}
+
+// --- collector expansion-work queue (no-key servers) -----------------------
+
+const CLAIM_TTL_MS = 5 * 60_000;
+
+export async function claimExpansionWork(
+  userId: number,
+): Promise<{ id: number; prompt: string } | null> {
+  await db
+    .update(tables.expansionRequests)
+    .set({ claimedAt: null })
+    .where(lt(tables.expansionRequests.claimedAt, new Date(Date.now() - CLAIM_TTL_MS)));
+  const [req] = await db
+    .select()
+    .from(tables.expansionRequests)
+    .where(and(eq(tables.expansionRequests.userId, userId), isNull(tables.expansionRequests.claimedAt)))
+    .orderBy(asc(tables.expansionRequests.id))
+    .limit(1);
+  if (!req) return null;
+  const claimed = await db
+    .update(tables.expansionRequests)
+    .set({ claimedAt: new Date() })
+    .where(and(eq(tables.expansionRequests.id, req.id), isNull(tables.expansionRequests.claimedAt)))
+    .returning();
+  if (!claimed[0]) return null; // raced with another of this user's devices
+  const [term] = await db.select().from(tables.terms).where(eq(tables.terms.id, req.termId));
+  if (!term) {
+    await db.delete(tables.expansionRequests).where(eq(tables.expansionRequests.id, req.id));
+    return null;
+  }
+  const level = await getUserCalibration(userId);
+  const base = { term: term.term, domain: term.domain, l1: term.l1 };
+  if (!req.grounding) {
+    return { id: req.id, prompt: localConceptPrompt(level, base) };
+  }
+  const src = await groundingSource(req.termId, userId, req.messageId ?? undefined);
+  return { id: req.id, prompt: localGroundingPrompt(level, { ...base, ...src }) };
+}
+
+export async function completeExpansionWork(
+  id: number,
+  userId: number,
+  text: string,
+): Promise<boolean> {
+  const trimmed = text.trim().slice(0, 4000);
+  if (!trimmed) return false;
+  const [req] = await db
+    .select()
+    .from(tables.expansionRequests)
+    .where(and(eq(tables.expansionRequests.id, id), eq(tables.expansionRequests.userId, userId)));
+  if (!req) return false;
+  if (req.grounding) {
+    await db
+      .insert(tables.userTerms)
+      .values({ userId, termId: req.termId, l3: trimmed })
+      .onConflictDoUpdate({ target: [tables.userTerms.userId, tables.userTerms.termId], set: { l3: trimmed } });
+  } else {
+    // First completion wins; the shared L2 is never overwritten.
+    await db
+      .update(tables.terms)
+      .set({ l2: trimmed })
+      .where(and(eq(tables.terms.id, req.termId), isNull(tables.terms.l2)));
+  }
+  await db.delete(tables.expansionRequests).where(eq(tables.expansionRequests.id, req.id));
+  return true;
 }
 
 function requireLLM() {

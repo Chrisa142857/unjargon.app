@@ -199,9 +199,12 @@ spend teaches everyone.
   requires querying the user's own stream with AI, so it is strictly opt-in:
   an "explain in my sessions · 1 AI call" button sends
   `POST /api/terms/:id/expand {level:"grounding"}`; a cached L3 returns
-  free. The response carries `l3Available` (false on a no-key server, which
-  also cannot generate L2 — routing expansions through the collector work
-  queue is the noted next step for no-key deployments).
+  free. On a no-key server the request is queued (`expansion_requests`,
+  `drizzle/0008`) and served by the requesting user's own collector via
+  `GET/POST /api/work/expand` — first in the work cycle since a user is
+  actively waiting, within the same local AI budget. Cards show a "queued —
+  your collector is explaining this…" state and poll every 5s while pending.
+  Requires collector ≥ v0.1.5.
 - **Privacy boundary (enforced, not prompt-only —
   `drizzle/0006_private_keywords.sql`):** only generic vocabulary
   ("term"/"initial" kinds, `terms.user_id NULL`) is shared. "keyword" terms

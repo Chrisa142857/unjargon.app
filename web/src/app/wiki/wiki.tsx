@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { api } from "@/lib/api";
 import AccountMenu from "@/app/account-menu";
 
@@ -132,7 +132,8 @@ function TermRow({
   const [loading, setLoading] = useState(false);
   const [grounding, setGrounding] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [l3Available, setL3Available] = useState(true);
+  // No-key servers queue the work for the user's collector; poll while pending.
+  const [pending, setPending] = useState({ concept: false, grounding: false });
 
   async function expand(level?: "grounding") {
     setError(null);
@@ -144,12 +145,24 @@ function TermRow({
       });
       if (!res.ok) throw new Error(`expand failed (${res.status})`);
       const data = await res.json();
-      setL3Available(data.l3Available);
+      setPending(data.pending ?? { concept: false, grounding: false });
       onExpanded(data.l2, data.l3);
     } catch (err) {
       setError(String(err));
     }
   }
+
+  const pollRef = useRef<() => void>(() => {});
+  useEffect(() => {
+    pollRef.current = () => {
+      expand();
+    };
+  });
+  useEffect(() => {
+    if (!open || (!pending.concept && !pending.grounding)) return;
+    const timer = window.setInterval(() => pollRef.current(), 5000);
+    return () => window.clearInterval(timer);
+  }, [open, pending.concept, pending.grounding]);
 
   // Opening shows the shared basic explanation (L1 + L2) only; the
   // in-context layer costs one AI call and is behind an explicit button.
@@ -189,12 +202,18 @@ function TermRow({
       {open && (
         <div className="border-t border-neutral-800 px-3 py-3 text-sm leading-relaxed">
           <p className="text-neutral-200">{t.l1}</p>
-          <Layer title="What it is" body={t.l2} loading={loading} error={error} />
+          {!t.l2 && pending.concept ? (
+            <p className="mt-3 animate-pulse text-sm text-neutral-500">queued — your collector is explaining this…</p>
+          ) : (
+            <Layer title="What it is" body={t.l2} loading={loading} error={error} />
+          )}
           {t.l3 ? (
             <Layer title="In your sessions" body={t.l3} loading={false} error={null} />
           ) : grounding ? (
             <Layer title="In your sessions" body={null} loading={true} error={error} />
-          ) : l3Available ? (
+          ) : pending.grounding ? (
+            <p className="mt-3 animate-pulse text-xs text-neutral-500">queued — your collector will explain this in your context…</p>
+          ) : (
             <button
               onClick={loadGrounding}
               className="mt-3 rounded-md border border-neutral-700 px-2 py-1 text-xs text-neutral-400 hover:text-neutral-100"
@@ -202,7 +221,7 @@ function TermRow({
             >
               explain in my sessions · 1 AI call
             </button>
-          ) : null}
+          )}
         </div>
       )}
     </div>

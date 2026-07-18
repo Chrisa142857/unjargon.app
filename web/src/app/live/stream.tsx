@@ -1008,7 +1008,9 @@ function InlineTermCard({
   const [loading, setLoading] = useState(false);
   const [grounding, setGrounding] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [l3Available, setL3Available] = useState(true);
+  // On a no-key server the work is queued for the user's own collector; the
+  // card polls while any layer is pending so the text appears when delivered.
+  const [pending, setPending] = useState({ concept: false, grounding: false });
 
   async function expand(level?: "grounding") {
     try {
@@ -1019,12 +1021,26 @@ function InlineTermCard({
       });
       if (!res.ok) throw new Error(`expand failed (${res.status})`);
       const data = await res.json();
-      setL3Available(data.l3Available);
+      setPending(data.pending ?? { concept: false, grounding: false });
       onExpanded(term.id, data.l2, data.l3);
     } catch (err) {
       setError(String(err));
     }
   }
+
+  // Poll through a ref so the interval survives parent re-renders (SSE churn)
+  // without depending on this render's expand identity.
+  const pollRef = useRef<() => void>(() => {});
+  useEffect(() => {
+    pollRef.current = () => {
+      expand();
+    };
+  });
+  useEffect(() => {
+    if (!open || (!pending.concept && !pending.grounding)) return;
+    const timer = window.setInterval(() => pollRef.current(), 5000);
+    return () => window.clearInterval(timer);
+  }, [open, pending.concept, pending.grounding]);
 
   // Opening shows the SHARED basic explanation only (L1 + L2) — no per-user
   // AI spend. The in-context layer is behind an explicit button below.
@@ -1075,6 +1091,8 @@ function InlineTermCard({
               </div>
             ) : term.l2 ? (
               <p className="text-neutral-200">{term.l2}</p>
+            ) : pending.concept ? (
+              <p className="animate-pulse text-neutral-500">queued — your collector is explaining this…</p>
             ) : !error ? (
               <p className="text-neutral-500">no deeper explanation available on this server</p>
             ) : null}
@@ -1088,7 +1106,9 @@ function InlineTermCard({
                 <div className="h-3 w-full rounded bg-neutral-800" />
                 <div className="h-3 w-4/6 rounded bg-neutral-800" />
               </div>
-            ) : l3Available ? (
+            ) : pending.grounding ? (
+              <p className="mt-3 animate-pulse text-xs text-neutral-500">queued — your collector will explain this in your context…</p>
+            ) : (
               <button
                 onClick={loadGrounding}
                 className="mt-3 rounded-md border border-neutral-700 px-2 py-1 text-xs text-neutral-400 hover:text-neutral-100"
@@ -1096,7 +1116,7 @@ function InlineTermCard({
               >
                 explain in my sessions · 1 AI call
               </button>
-            ) : null}
+            )}
             <button
               onClick={onClose}
               className="mt-2 block text-xs text-neutral-500 hover:text-neutral-300"

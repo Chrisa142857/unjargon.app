@@ -166,6 +166,37 @@ ${input.snippet}
 >>>`;
 }
 
+// Collector-run expansion prompts (no-key servers): same content as the
+// concept/grounding prompts, phrased for a headless CLI that must reply
+// with a single {"text": ...} JSON object.
+const HEADLESS_TEXT_RULE = `
+
+You are running headless with no tools. Reply with ONLY one JSON object — no prose, no markdown fences — of the form {"text": "<the explanation>"}.`;
+
+export function localConceptPrompt(
+  level: CalibrationLevel,
+  input: { term: string; domain: string; l1: string },
+): string {
+  return `${conceptSystemPrompt(level)}
+
+${conceptUserPrompt(input)}${HEADLESS_TEXT_RULE}`;
+}
+
+export function localGroundingPrompt(
+  level: CalibrationLevel,
+  input: {
+    term: string;
+    domain: string;
+    l1: string;
+    projectName?: string | null;
+    snippet: string;
+  },
+): string {
+  return `${groundingSystemPrompt(level)}
+
+${groundingUserPrompt(input)}${HEADLESS_TEXT_RULE}`;
+}
+
 export const groundingTool = {
   name: "emit_grounding",
   description:
