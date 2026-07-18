@@ -167,6 +167,10 @@ budget-reset time survives restarts in `~/.local/state/unjargond/ai-budget.json`
   budget-pause resume time, and an ETA computed only from the measured rate;
   it stays visible until the queue is empty. Raw history is browsable
   immediately throughout.
+- Because unjargon spends the **user's own AI credentials**, budget usage is
+  always on screen: a persistent `AI used/limit` header chip (per-device
+  breakdown in the tooltip, amber when ≥80% or resting) plus an
+  "AI calls used (your credentials)" line in the import card.
 
 Verified end-to-end locally: no-key server queues → chronological claim
 (oldest `ts` first across sessions) → daemon work loop translates with a stub

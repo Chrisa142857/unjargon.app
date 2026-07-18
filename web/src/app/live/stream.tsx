@@ -51,11 +51,22 @@ export type LiveDigest = {
   summary: string;
 };
 
+// One collector's local AI budget: unjargon spends the USER'S own AI
+// credentials (their claude CLI), so usage is always shown, never hidden.
+type DeviceBudget = {
+  device: string;
+  used: number;
+  limit: number;
+  pausedUntil: string | null;
+  updatedAt: string | null;
+};
+
 type ImportProgress = {
   messages: number;
   translated: number;
   ratePerHour: number; // translations finished in the last hour (server-measured)
   pausedUntil: string | null; // collector AI budget resets then
+  budgets: DeviceBudget[];
   sessions: number;
   firstMessageAt: string | null;
   lastMessageAt: string | null;
@@ -236,6 +247,40 @@ function etaLabel(pendingHours: number): string {
   return `~${Math.round(pendingHours / 24)} days`;
 }
 
+// Always-visible AI spend indicator: unjargon runs short calls on the user's
+// own AI credentials, so the current window's usage stays on screen even when
+// no import is running. One collector → "AI 12/30"; several → summed, with
+// the per-device breakdown in the tooltip.
+function BudgetChip({ budgets }: { budgets: DeviceBudget[] }) {
+  const [now] = useState(() => Date.now()); // impure Date.now() must stay out of render
+  const reported = budgets.filter((b) => b.limit > 0);
+  if (reported.length === 0) return null;
+  const used = reported.reduce((n, b) => n + b.used, 0);
+  const limit = reported.reduce((n, b) => n + b.limit, 0);
+  const resting = reported.some(
+    (b) => b.pausedUntil && Date.parse(b.pausedUntil) > now,
+  );
+  const title =
+    "unjargon explains messages using YOUR AI credentials (your claude CLI): " +
+    "short calls capped per rolling 5-hour window, at most 15 minutes (5%) of local AI runtime.\n" +
+    reported
+      .map(
+        (b) =>
+          `${b.device}: ${b.used}/${b.limit} calls used` +
+          (b.updatedAt ? ` (reported ${new Date(b.updatedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })})` : ""),
+      )
+      .join("\n");
+  const warm = resting || used / limit >= 0.8;
+  return (
+    <span
+      title={title}
+      className={`cursor-default rounded-md border px-2 py-1 text-xs ${warm ? "border-amber-300/40 bg-amber-300/10 text-amber-200" : "border-neutral-700 text-neutral-400"}`}
+    >
+      AI {used}/{limit}{resting ? " · resting" : ""}
+    </span>
+  );
+}
+
 function ImportProgressCard({ progress }: { progress: ImportProgress }) {
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
@@ -259,6 +304,9 @@ function ImportProgressCard({ progress }: { progress: ImportProgress }) {
   const range = progress.firstMessageAt && progress.lastMessageAt
     ? `${dayLabelOf(progress.firstMessageAt)} → ${dayLabelOf(progress.lastMessageAt)}`
     : null;
+  const reported = progress.budgets.filter((b) => b.limit > 0);
+  const budgetUsed = reported.reduce((n, b) => n + b.used, 0);
+  const budgetLimit = reported.reduce((n, b) => n + b.limit, 0);
 
   let status: string;
   if (pending === 0) {
@@ -288,6 +336,11 @@ function ImportProgressCard({ progress }: { progress: ImportProgress }) {
         <span><strong className="text-white">{progress.messages.toLocaleString()}</strong> updates received</span>
         <span><strong className="text-white">{progress.sessions.toLocaleString()}</strong> sessions found</span>
         {range && <span>{range}</span>}
+        {budgetLimit > 0 && (
+          <span title="unjargon explains messages with short calls on YOUR AI credentials (your claude CLI), capped per rolling 5-hour window">
+            <strong className="text-white">{budgetUsed}/{budgetLimit}</strong> AI calls used (your credentials)
+          </span>
+        )}
       </div>
       <p className="mt-3 text-xs text-neutral-500">{status}</p>
     </section>
@@ -314,7 +367,7 @@ export default function LiveStream() {
   const [pinned, setPinned] = useState(true);
   const [showOriginals, setShowOriginals] = useState(false);
   const [calibration, setCalibration] = useState<Calibration>("new");
-  const [progress, setProgress] = useState<ImportProgress>({ messages: 0, translated: 0, ratePerHour: 0, pausedUntil: null, sessions: 0, firstMessageAt: null, lastMessageAt: null, lastImportedAt: null });
+  const [progress, setProgress] = useState<ImportProgress>({ messages: 0, translated: 0, ratePerHour: 0, pausedUntil: null, budgets: [], sessions: 0, firstMessageAt: null, lastMessageAt: null, lastImportedAt: null });
 
   useEffect(() => {
     let cancelled = false;
@@ -546,6 +599,7 @@ export default function LiveStream() {
           </span>
         )}
         <span className="ml-auto flex items-center gap-2">
+          <BudgetChip budgets={progress.budgets} />
           <span className="flex overflow-hidden rounded-md border border-neutral-700 text-xs">
             <button
               onClick={() => setView("board")}

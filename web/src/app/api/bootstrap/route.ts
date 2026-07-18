@@ -44,16 +44,37 @@ export async function GET(req: Request) {
     .innerJoin(tables.devices, eq(tables.sessions.deviceId, tables.devices.id))
     .where(eq(tables.devices.userId, user.id));
 
-  // Budget pause, as reported by the user's collectors via POST /api/status.
+  // Per-device AI budget, as reported by the user's collectors via
+  // POST /api/status — surfaced because unjargon spends the USER'S own AI
+  // credentials, so usage must be visible, not just the pause it causes.
   const deviceRows = await db
-    .select({ importStatus: tables.devices.importStatus })
+    .select({ name: tables.devices.name, importStatus: tables.devices.importStatus })
     .from(tables.devices)
     .where(eq(tables.devices.userId, user.id));
   let pausedUntil: string | null = null;
+  const budgets: {
+    device: string;
+    used: number;
+    limit: number;
+    pausedUntil: string | null;
+    updatedAt: string | null;
+  }[] = [];
   for (const d of deviceRows) {
     if (!d.importStatus) continue;
     try {
-      const s = JSON.parse(d.importStatus) as { pausedUntil?: string | null };
+      const s = JSON.parse(d.importStatus) as {
+        pausedUntil?: string | null;
+        budgetUsed?: number;
+        budgetLimit?: number;
+        updatedAt?: string;
+      };
+      budgets.push({
+        device: d.name,
+        used: Number(s.budgetUsed) || 0,
+        limit: Number(s.budgetLimit) || 0,
+        pausedUntil: s.pausedUntil ?? null,
+        updatedAt: s.updatedAt ?? null,
+      });
       if (
         s.pausedUntil &&
         Date.parse(s.pausedUntil) > Date.now() &&
@@ -156,6 +177,7 @@ export async function GET(req: Request) {
       translated: Number(progress.translated),
       ratePerHour: Number(progress.translatedLastHour),
       pausedUntil,
+      budgets,
       sessions: Number(progress.sessions),
       firstMessageAt: progress.firstMessageAt?.toISOString() ?? null,
       lastMessageAt: progress.lastMessageAt?.toISOString() ?? null,
