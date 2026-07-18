@@ -1,8 +1,8 @@
 import Anthropic from "@anthropic-ai/sdk";
-import { asc, eq, isNull } from "drizzle-orm";
+import { and, asc, eq, inArray, isNull, lt } from "drizzle-orm";
 import { db, tables } from "@/db";
 import { publish } from "@/lib/bus";
-import { scheduleDigestCheck } from "@/lib/digest";
+import { scheduleDigestCheck, serverCanLLM } from "@/lib/digest";
 import {
   TRANSLATION_MODEL,
   translationSystemPrompt,
@@ -93,7 +93,7 @@ async function drainSession(sessionId: number) {
         return;
       }
       for (const msg of mine) {
-        await translateMessage(msg);
+        if (!(await translateMessage(msg))) return; // stays queued for collectors
       }
     }
   } finally {
@@ -101,10 +101,17 @@ async function drainSession(sessionId: number) {
   }
 }
 
-async function translateMessage(msg: typeof tables.messages.$inferSelect) {
+// Returns false when the server cannot LLM: the message stays untranslated
+// (translated_at NULL) and collectors claim it via /api/work/translate —
+// marking it skipped here would permanently drop jargon extraction.
+async function translateMessage(
+  msg: typeof tables.messages.$inferSelect,
+): Promise<boolean> {
   let result: TranslationResult;
   if (msg.text.trim().length < TRIVIAL_LENGTH) {
     result = { skip: true };
+  } else if (!serverCanLLM()) {
+    return false;
   } else {
     try {
       result = await callTranslator(msg);
@@ -114,6 +121,80 @@ async function translateMessage(msg: typeof tables.messages.$inferSelect) {
     }
   }
   await storeResult(msg, sanitize(result, msg.text));
+  return true;
+}
+
+// --- collector translate-work queue (no-key deployments) --------------------
+//
+// The queue is Postgres itself: untranslated messages, served oldest-first by
+// message time across every session and device the user owns — persisted and
+// globally chronological, surviving collector and server restarts.
+
+const CLAIM_TTL_MS = 5 * 60_000;
+const WORK_BATCH = 5;
+
+export async function claimTranslateWork(
+  userId: number,
+): Promise<{ id: number; text: string }[]> {
+  // Reap stale claims (collector died or gave up mid-batch).
+  await db
+    .update(tables.messages)
+    .set({ claimedAt: null })
+    .where(
+      and(
+        isNull(tables.messages.translatedAt),
+        lt(tables.messages.claimedAt, new Date(Date.now() - CLAIM_TTL_MS)),
+      ),
+    );
+  // ponytail: select-then-update, not FOR UPDATE SKIP LOCKED — two devices
+  // polling in the same instant can double-claim a batch (wasting one budget
+  // call, results still stored once); add row locking when that shows up.
+  const rows = await db
+    .select({ id: tables.messages.id, text: tables.messages.text })
+    .from(tables.messages)
+    .innerJoin(tables.sessions, eq(tables.messages.sessionId, tables.sessions.id))
+    .innerJoin(tables.devices, eq(tables.sessions.deviceId, tables.devices.id))
+    .where(
+      and(
+        eq(tables.devices.userId, userId),
+        isNull(tables.messages.translatedAt),
+        isNull(tables.messages.claimedAt),
+      ),
+    )
+    .orderBy(asc(tables.messages.ts), asc(tables.messages.id))
+    .limit(WORK_BATCH);
+  if (rows.length === 0) return [];
+  await db
+    .update(tables.messages)
+    .set({ claimedAt: new Date() })
+    .where(inArray(tables.messages.id, rows.map((r) => r.id)));
+  return rows;
+}
+
+export async function completeTranslateWork(
+  userId: number,
+  items: { id: number; translation: TranslationResult }[],
+): Promise<number> {
+  let stored = 0;
+  for (const item of items) {
+    if (!Number.isInteger(item?.id) || typeof item?.translation !== "object" || !item.translation) continue;
+    const [row] = await db
+      .select({ msg: tables.messages })
+      .from(tables.messages)
+      .innerJoin(tables.sessions, eq(tables.messages.sessionId, tables.sessions.id))
+      .innerJoin(tables.devices, eq(tables.sessions.deviceId, tables.devices.id))
+      .where(
+        and(
+          eq(tables.messages.id, item.id),
+          eq(tables.devices.userId, userId),
+          isNull(tables.messages.translatedAt),
+        ),
+      );
+    if (!row) continue; // not theirs, or another worker finished it first
+    await storeProvidedTranslation(row.msg, item.translation);
+    stored++;
+  }
+  return stored;
 }
 
 // A translation produced on the collector side (local-translate mode: the

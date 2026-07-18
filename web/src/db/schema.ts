@@ -14,6 +14,9 @@ export const devices = pgTable("devices", {
   userId: integer("user_id").references(() => users.id),
   name: text("name").notNull(),
   tokenHash: text("token_hash"),
+  // Collector-reported JSON: {pausedUntil, budgetUsed, budgetLimit, updatedAt}
+  // — what the server can't know about the device's local AI budget.
+  importStatus: text("import_status"),
   lastSeenAt: timestamp("last_seen_at", { withTimezone: true }).defaultNow().notNull(),
 }, (t) => [uniqueIndex("devices_user_name").on(t.userId, t.name)]);
 
@@ -63,6 +66,9 @@ export const messages = pgTable("messages", {
   // message. Drives the highlights filter.
   importance: real("importance"),
   translatedAt: timestamp("translated_at", { withTimezone: true }),
+  // translate-work queue claim (set when a collector takes the message,
+  // reaped after a TTL) — untranslated messages ARE the import queue.
+  claimedAt: timestamp("claimed_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
 });
 

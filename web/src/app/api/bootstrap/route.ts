@@ -1,4 +1,4 @@
-import { and, count, countDistinct, desc, eq, inArray, max, min, ne } from "drizzle-orm";
+import { and, count, countDistinct, desc, eq, inArray, max, min, ne, sql } from "drizzle-orm";
 import { db, tables } from "@/db";
 import { requireUser } from "@/lib/auth";
 
@@ -23,11 +23,17 @@ export async function GET(req: Request) {
     .limit(200);
   const digests = digestRows.map((r) => r.digests).reverse();
 
-  // A collector cannot know a stable total while its agent keeps writing, so
-  // expose the records actually received instead of manufacturing a percentage.
+  // Truthful import status: total = messages received, completed = messages
+  // with a translation verdict, rate = translations finished in the last hour
+  // (measured from translated_at — never inferred from upload recency).
+  const hourAgo = new Date(Date.now() - 3600_000).toISOString();
   const [progress] = await db
     .select({
       messages: count(tables.messages.id),
+      translated: count(tables.messages.translatedAt),
+      translatedLastHour: count(
+        sql`case when ${tables.messages.translatedAt} > ${hourAgo}::timestamptz then 1 end`,
+      ),
       sessions: countDistinct(tables.sessions.id),
       firstMessageAt: min(tables.messages.ts),
       lastMessageAt: max(tables.messages.ts),
@@ -37,6 +43,26 @@ export async function GET(req: Request) {
     .innerJoin(tables.sessions, eq(tables.messages.sessionId, tables.sessions.id))
     .innerJoin(tables.devices, eq(tables.sessions.deviceId, tables.devices.id))
     .where(eq(tables.devices.userId, user.id));
+
+  // Budget pause, as reported by the user's collectors via POST /api/status.
+  const deviceRows = await db
+    .select({ importStatus: tables.devices.importStatus })
+    .from(tables.devices)
+    .where(eq(tables.devices.userId, user.id));
+  let pausedUntil: string | null = null;
+  for (const d of deviceRows) {
+    if (!d.importStatus) continue;
+    try {
+      const s = JSON.parse(d.importStatus) as { pausedUntil?: string | null };
+      if (
+        s.pausedUntil &&
+        Date.parse(s.pausedUntil) > Date.now() &&
+        (!pausedUntil || s.pausedUntil > pausedUntil)
+      ) {
+        pausedUntil = s.pausedUntil;
+      }
+    } catch {} // unreadable status — ignore that device
+  }
 
   // Per session, everything up to the newest digest is covered.
   const coveredTo = new Map<number, number>();
@@ -127,6 +153,9 @@ export async function GET(req: Request) {
     calibration: user.calibration,
     progress: {
       messages: Number(progress.messages),
+      translated: Number(progress.translated),
+      ratePerHour: Number(progress.translatedLastHour),
+      pausedUntil,
       sessions: Number(progress.sessions),
       firstMessageAt: progress.firstMessageAt?.toISOString() ?? null,
       lastMessageAt: progress.lastMessageAt?.toISOString() ?? null,

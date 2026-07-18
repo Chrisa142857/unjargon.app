@@ -53,6 +53,9 @@ export type LiveDigest = {
 
 type ImportProgress = {
   messages: number;
+  translated: number;
+  ratePerHour: number; // translations finished in the last hour (server-measured)
+  pausedUntil: string | null; // collector AI budget resets then
   sessions: number;
   firstMessageAt: string | null;
   lastMessageAt: string | null;
@@ -225,35 +228,68 @@ function InstallCollectorCallout() {
   );
 }
 
+// Rough remaining-work label from the measured completion rate; never claims
+// more precision than an hourly count supports.
+function etaLabel(pendingHours: number): string {
+  if (pendingHours < 1) return `~${Math.max(5, Math.round((pendingHours * 60) / 5) * 5)} min`;
+  if (pendingHours < 48) return `~${Math.round(pendingHours)} h`;
+  return `~${Math.round(pendingHours / 24)} days`;
+}
+
 function ImportProgressCard({ progress }: { progress: ImportProgress }) {
-  const [receiving, setReceiving] = useState(false);
+  const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
-    const refresh = () => setReceiving(
-      progress.lastImportedAt !== null &&
-      Date.now() - Date.parse(progress.lastImportedAt) < 60_000,
-    );
-    refresh();
-    const timer = window.setInterval(refresh, 10_000);
+    const timer = window.setInterval(() => setNow(Date.now()), 10_000);
     return () => window.clearInterval(timer);
-  }, [progress.lastImportedAt]);
-  if (!receiving || progress.messages === 0) return null;
+  }, []);
+  const pending = Math.max(0, progress.messages - progress.translated);
+  const receiving =
+    progress.lastImportedAt !== null &&
+    now - Date.parse(progress.lastImportedAt) < 60_000;
+  if (progress.messages === 0 || (pending === 0 && !receiving)) return null;
+
+  const paused =
+    progress.pausedUntil !== null && Date.parse(progress.pausedUntil) > now;
+  const pct = Math.floor((progress.translated / progress.messages) * 100);
+  // ETA from the measured completion rate — never from upload recency.
+  const eta =
+    pending > 0 && progress.ratePerHour > 0
+      ? etaLabel(pending / progress.ratePerHour)
+      : null;
   const range = progress.firstMessageAt && progress.lastMessageAt
     ? `${dayLabelOf(progress.firstMessageAt)} → ${dayLabelOf(progress.lastMessageAt)}`
     : null;
 
+  let status: string;
+  if (pending === 0) {
+    status = "All caught up — receiving new updates now.";
+  } else if (paused) {
+    const resume = new Date(progress.pausedUntil!).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+    status = `Your AI budget is resting — explaining resumes around ${resume}${eta ? ` (${eta} of work left)` : ""}. Raw history is already browsable.`;
+  } else if (eta) {
+    status = `${eta} until everything is explained, at the current pace.`;
+  } else {
+    status = "Waiting for your collector to explain these — raw history is already browsable.";
+  }
+
   return (
     <section aria-live="polite" className="mb-6 rounded-xl border border-sky-200/20 bg-sky-300/[0.06] p-5 text-left shadow-[0_0_45px_rgba(125,211,252,0.05)]">
       <div className="flex items-center gap-2 text-sm font-medium text-sky-100">
-        <span className="relative flex h-2.5 w-2.5"><span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-sky-300/60" /><span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-sky-300" /></span>
-        Importing existing agent history
+        <span className="relative flex h-2.5 w-2.5"><span className={`absolute inline-flex h-full w-full rounded-full bg-sky-300/60 ${paused ? "" : "animate-ping"}`} /><span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-sky-300" /></span>
+        {pending > 0 ? "Explaining your agent history" : "Importing agent history"}
+        {pending > 0 && <span className="ml-auto text-xs font-normal text-sky-200/80">{progress.translated.toLocaleString()} / {progress.messages.toLocaleString()}</span>}
       </div>
-      <div className="mt-4 h-1.5 overflow-hidden rounded-full bg-sky-100/10"><div className="h-full w-1/3 animate-pulse rounded-full bg-sky-300" /></div>
+      <div className="mt-4 h-1.5 overflow-hidden rounded-full bg-sky-100/10">
+        {pending > 0
+          ? <div className="h-full rounded-full bg-sky-300 transition-[width] duration-700" style={{ width: `${Math.max(2, pct)}%` }} />
+          : <div className="h-full w-1/3 animate-pulse rounded-full bg-sky-300" />}
+      </div>
       <div className="mt-4 flex flex-wrap gap-x-5 gap-y-1 text-sm text-neutral-300">
         <span><strong className="text-white">{progress.messages.toLocaleString()}</strong> updates received</span>
         <span><strong className="text-white">{progress.sessions.toLocaleString()}</strong> sessions found</span>
         {range && <span>{range}</span>}
       </div>
-      <p className="mt-3 text-xs text-neutral-500">Receiving now. The total grows as Claude Code and Codex transcript files are scanned.</p>
+      <p className="mt-3 text-xs text-neutral-500">{status}</p>
     </section>
   );
 }
@@ -278,7 +314,7 @@ export default function LiveStream() {
   const [pinned, setPinned] = useState(true);
   const [showOriginals, setShowOriginals] = useState(false);
   const [calibration, setCalibration] = useState<Calibration>("new");
-  const [progress, setProgress] = useState<ImportProgress>({ messages: 0, sessions: 0, firstMessageAt: null, lastMessageAt: null, lastImportedAt: null });
+  const [progress, setProgress] = useState<ImportProgress>({ messages: 0, translated: 0, ratePerHour: 0, pausedUntil: null, sessions: 0, firstMessageAt: null, lastMessageAt: null, lastImportedAt: null });
 
   useEffect(() => {
     let cancelled = false;
@@ -421,6 +457,9 @@ export default function LiveStream() {
               : m,
           ),
         );
+        // The server publishes exactly one translation event per message, so
+        // counting them keeps completed/total live between bootstraps.
+        setProgress((p) => ({ ...p, translated: p.translated + 1 }));
         const now = new Date().toISOString();
         if (event.newTerms.length > 0) {
           setTerms((prev) => {
