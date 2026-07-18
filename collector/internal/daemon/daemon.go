@@ -264,16 +264,16 @@ func (d *Daemon) track(path string, fromHook bool) {
 		return
 	}
 	var offset int64
+	var existingSize int64
 	existing := false
 	if st, err := os.Stat(path); err == nil {
 		existing = st.ModTime().Before(d.started)
+		existingSize = st.Size()
 	}
 	if saved, ok := d.offsets.get(path); ok {
 		offset = saved
 	} else if !fromHook && !d.cfg.BackfillExisting {
-		if existing {
-			offset = st.Size()
-		}
+		offset = existingSize
 	}
 	d.tailers[path] = &tracked{
 		tailer: tail.NewAt(path, offset),
