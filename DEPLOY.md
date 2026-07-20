@@ -57,6 +57,13 @@ https://unjargon-d1.<your-subdomain>.workers.dev/query
 `web/d1/0000_init.sql` is a fresh D1 baseline. Do **not** run the old
 `web/drizzle/` Postgres migrations on D1.
 
+For an existing `unjargon` D1 database, apply each numbered D1 upgrade before
+deploying the matching Render code. The current consent upgrade is:
+
+```sh
+npx wrangler d1 execute unjargon --remote --file=../web/d1/0001_expand_consent.sql
+```
+
 ## 2. Configure Render
 
 In the `unjargon` Render service, add these environment variables:

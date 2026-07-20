@@ -5,6 +5,7 @@ import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { api, apiBase, apiBaseIsBuiltIn, bounceToApiOrigin, setApiBase } from "@/lib/api";
 import type { ClientStreamEvent } from "@/lib/bus";
 import AccountMenu from "@/app/account-menu";
+import { AiCallConfirmButton } from "@/app/ai-confirm";
 
 export type LiveAnnotation = {
   id: number;
@@ -792,7 +793,7 @@ function InlineTermCard({
       const res = await fetch(api(`/api/terms/${term.id}/expand`), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ messageId, action }),
+        body: JSON.stringify({ messageId, action, confirmed: true }),
       });
       const data = await res.json().catch(() => null);
       if (!res.ok) throw new Error(data?.error ?? `expand failed (${res.status})`);
@@ -858,13 +859,12 @@ function InlineTermCard({
             ) : pending.concept ? (
               <p className="animate-pulse text-neutral-500">queued — a connected collector is explaining this…</p>
             ) : !error ? (
-              <button
-                onClick={loadConcept}
+              <AiCallConfirmButton
+                action="concept"
+                term={term.term}
+                onConfirm={loadConcept}
                 className="rounded-md border border-neutral-700 px-2 py-1 text-xs text-neutral-400 hover:text-neutral-100"
-                title="asks your configured AI for a generic explanation — costs one AI call"
-              >
-                explain what this means · 1 AI call
-              </button>
+              />
             ) : null}
             {term.l3 ? (
               <div className="mt-3 border-t border-white/[0.06] pt-2">
@@ -879,13 +879,12 @@ function InlineTermCard({
             ) : pending.grounding ? (
               <p className="mt-3 animate-pulse text-xs text-neutral-500">queued — a connected collector will explain this in your context…</p>
             ) : (
-              <button
-                onClick={loadGrounding}
+              <AiCallConfirmButton
+                action="grounding"
+                term={term.term}
+                onConfirm={loadGrounding}
                 className="mt-3 rounded-md border border-neutral-700 px-2 py-1 text-xs text-neutral-400 hover:text-neutral-100"
-                title="reads this term's message from your stream and explains it in your context — costs one AI call"
-              >
-                explain in my sessions · 1 AI call
-              </button>
+              />
             )}
             <button
               onClick={onClose}

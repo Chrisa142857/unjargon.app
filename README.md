@@ -36,7 +36,9 @@ an automatic chip source: it measures unfamiliarity, not whether a word has a
 distinct glossary meaning.
 
 When a user taps **“explain what this means · 1 AI call”** or **“explain in my
-sessions · 1 AI call”**, unjargon uses server AI only when both
+sessions · 1 AI call”**, unjargon first shows a per-request confirmation that
+warns about local Claude Code/Codex usage and the in-context excerpt. Only a
+confirmed request can reach AI. unjargon uses server AI only when both
 `UNJARGON_ALLOW_SERVER_AI=1` and `ANTHROPIC_API_KEY` are configured; otherwise
 it queues that single request for the paired collector's local AI CLI. Leave
 the opt-in flag unset for a zero-cost deployment. No card opening, transcript

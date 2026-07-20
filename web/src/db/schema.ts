@@ -139,13 +139,15 @@ export const termSightings = sqliteTable("term_sightings", {
 // Queued expansion work for no-key servers: a user asked for a term's L2
 // (grounding=false, shared once generated) or L3 (grounding=true, their own
 // in-context layer). Served to the requesting user's own collector, which
-// runs it within the local AI budget; the row is deleted on completion.
+// runs it within the local AI budget; only a recent, explicit confirmation is
+// claimable, and the row is deleted on completion.
 export const expansionRequests = sqliteTable("expansion_requests", {
   id: integer("id").primaryKey({ autoIncrement: true }),
   termId: integer("term_id").notNull().references(() => terms.id),
   userId: integer("user_id").notNull().references(() => users.id),
   grounding: integer("grounding", { mode: "boolean" }).notNull().default(false),
   messageId: integer("message_id"), // optional tapped-from source for L3
+  confirmedAt: timestamp("confirmed_at"),
   claimedAt: timestamp("claimed_at"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 }, (t) => [uniqueIndex("expansion_requests_unique").on(t.termId, t.userId, t.grounding)]);

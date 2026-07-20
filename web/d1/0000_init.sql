@@ -116,11 +116,18 @@ CREATE TABLE IF NOT EXISTS "expansion_requests" (
   "user_id" integer NOT NULL REFERENCES "users"("id"),
   "grounding" integer DEFAULT false NOT NULL,
   "message_id" integer,
+  "confirmed_at" integer,
   "claimed_at" integer,
   "created_at" integer DEFAULT (cast((julianday('now') - 2440587.5)*86400000 as integer)) NOT NULL
 );
 CREATE UNIQUE INDEX IF NOT EXISTS "expansion_requests_unique" ON "expansion_requests" ("term_id", "user_id", "grounding");
 CREATE INDEX IF NOT EXISTS "expansion_requests_user_claimed" ON "expansion_requests" ("user_id", "claimed_at");
+CREATE TRIGGER IF NOT EXISTS "expansion_requests_require_confirmation"
+BEFORE INSERT ON "expansion_requests"
+WHEN NEW."confirmed_at" IS NULL
+BEGIN
+  SELECT RAISE(ABORT, 'AI confirmation required');
+END;
 
 CREATE TABLE IF NOT EXISTS "settings" (
   "key" text PRIMARY KEY NOT NULL,

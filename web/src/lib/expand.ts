@@ -1,5 +1,5 @@
 import Anthropic from "@anthropic-ai/sdk";
-import { and, asc, desc, eq, isNull, lt } from "drizzle-orm";
+import { and, asc, desc, eq, gt, isNotNull, isNull, lt, lte, or } from "drizzle-orm";
 import { db, tables } from "@/db";
 import {
   EXPLANATION_MODEL,
@@ -26,8 +26,10 @@ import { hasLiveLocalExpander } from "@/lib/local-expander";
 // default.
 
 const SNIPPET_MAX = 1200;
+const CONFIRMATION_TTL_MS = 10 * 60_000;
 
 export class LocalExplainerUnavailable extends Error {}
+export class AIConfirmationRequired extends Error {}
 
 async function localExpanderAvailable(userId: number) {
   const devices = await db
@@ -40,7 +42,7 @@ async function localExpanderAvailable(userId: number) {
 export async function expandTerm(
   termId: number,
   userId: number,
-  opts: { sourceMessageId?: number; action?: "concept" | "grounding" } = {},
+  opts: { sourceMessageId?: number; action?: "concept" | "grounding"; confirmed?: boolean } = {},
 ): Promise<
   | {
       l2: string | null;
@@ -64,6 +66,7 @@ export async function expandTerm(
 
   let l2 = term.l2;
   if (!l2 && opts.action === "concept") {
+    requireAIConfirmation(opts.confirmed);
     if (server) {
       l2 = await callConcept({
         term: term.term,
@@ -73,10 +76,10 @@ export async function expandTerm(
       await db.update(tables.terms).set({ l2 }).where(eq(tables.terms.id, termId));
     } else {
       if (!local) throw new LocalExplainerUnavailable();
-      // No-key server: queue for the user's own collector (idempotent).
+      await replaceUnconfirmedRequest(termId, userId, false);
       await db
         .insert(tables.expansionRequests)
-        .values({ termId, userId, grounding: false })
+        .values({ termId, userId, grounding: false, confirmedAt: new Date() })
         .onConflictDoNothing();
       pending.concept = true;
     }
@@ -85,6 +88,7 @@ export async function expandTerm(
   // Cached L3 is free to return; generating one happens only on request.
   let l3 = profile?.l3 ?? null;
   if (!l3 && opts.action === "grounding") {
+    requireAIConfirmation(opts.confirmed);
     if (server) {
       const src = await groundingSource(termId, userId, opts.sourceMessageId);
       l3 = await callGrounding(
@@ -94,9 +98,10 @@ export async function expandTerm(
       await db.insert(tables.userTerms).values({ userId, termId, l3 }).onConflictDoUpdate({ target: [tables.userTerms.userId, tables.userTerms.termId], set: { l3 } });
     } else {
       if (!local) throw new LocalExplainerUnavailable();
+      await replaceUnconfirmedRequest(termId, userId, true);
       await db
         .insert(tables.expansionRequests)
-        .values({ termId, userId, grounding: true, messageId: opts.sourceMessageId ?? null })
+        .values({ termId, userId, grounding: true, messageId: opts.sourceMessageId ?? null, confirmedAt: new Date() })
         .onConflictDoNothing();
     }
   }
@@ -104,12 +109,40 @@ export async function expandTerm(
     const requests = await db
       .select({ grounding: tables.expansionRequests.grounding })
       .from(tables.expansionRequests)
-      .where(and(eq(tables.expansionRequests.termId, termId), eq(tables.expansionRequests.userId, userId)));
+      .where(and(
+        eq(tables.expansionRequests.termId, termId),
+        eq(tables.expansionRequests.userId, userId),
+        gt(tables.expansionRequests.confirmedAt, confirmationCutoff()),
+      ));
     pending.concept = local && !l2 && requests.some((request) => !request.grounding);
     pending.grounding = local && !l3 && requests.some((request) => request.grounding);
   }
 
   return { l2, l3, l3Available: true, pending };
+}
+
+function requireAIConfirmation(confirmed: boolean | undefined) {
+  if (!confirmed) throw new AIConfirmationRequired("AI confirmation required");
+}
+
+function confirmationCutoff() {
+  return new Date(Date.now() - CONFIRMATION_TTL_MS);
+}
+
+// A pre-consent row from an older deployment conflicts with the unique key.
+// Remove only rows that cannot be claimed, then insert a fresh confirmation.
+async function replaceUnconfirmedRequest(termId: number, userId: number, grounding: boolean) {
+  await db
+    .delete(tables.expansionRequests)
+    .where(and(
+      eq(tables.expansionRequests.termId, termId),
+      eq(tables.expansionRequests.userId, userId),
+      eq(tables.expansionRequests.grounding, grounding),
+      or(
+        isNull(tables.expansionRequests.confirmedAt),
+        lte(tables.expansionRequests.confirmedAt, confirmationCutoff()),
+      ),
+    ));
 }
 
 // The source message grounding L3 (must belong to this user): the one they
@@ -169,18 +202,29 @@ export async function claimExpansionWork(
   await db
     .update(tables.expansionRequests)
     .set({ claimedAt: null })
-    .where(lt(tables.expansionRequests.claimedAt, new Date(Date.now() - CLAIM_TTL_MS)));
+    .where(and(
+      isNotNull(tables.expansionRequests.confirmedAt),
+      lt(tables.expansionRequests.claimedAt, new Date(Date.now() - CLAIM_TTL_MS)),
+    ));
   const [req] = await db
     .select()
     .from(tables.expansionRequests)
-    .where(and(eq(tables.expansionRequests.userId, userId), isNull(tables.expansionRequests.claimedAt)))
+    .where(and(
+      eq(tables.expansionRequests.userId, userId),
+      isNull(tables.expansionRequests.claimedAt),
+      gt(tables.expansionRequests.confirmedAt, confirmationCutoff()),
+    ))
     .orderBy(asc(tables.expansionRequests.id))
     .limit(1);
   if (!req) return null;
   const claimed = await db
     .update(tables.expansionRequests)
     .set({ claimedAt: new Date() })
-    .where(and(eq(tables.expansionRequests.id, req.id), isNull(tables.expansionRequests.claimedAt)))
+    .where(and(
+      eq(tables.expansionRequests.id, req.id),
+      isNull(tables.expansionRequests.claimedAt),
+      gt(tables.expansionRequests.confirmedAt, confirmationCutoff()),
+    ))
     .returning();
   if (!claimed[0]) return null; // raced with another of this user's devices
   const [term] = await db.select().from(tables.terms).where(eq(tables.terms.id, req.termId));

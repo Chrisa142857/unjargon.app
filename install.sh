@@ -197,7 +197,7 @@ echo "on this machine, then open $SERVER/live — detected jargon should appear.
 echo "Existing Claude Code and Codex sessions are imported once on this install."
 echo
 echo "AI usage notice: importing and detecting jargon use zero AI calls."
-echo "AI is used only after you press an explanation button in unjargon, capped"
+echo "AI is used only after you confirm an explanation in unjargon, capped"
 echo "at 30 calls of at most 30 seconds per rolling 5 hours. To disable local"
 echo "on-demand explanations entirely:"
 echo "  echo 'UNJARGON_LOCAL_EXPLAIN=off' >> $CONF_DIR/env"

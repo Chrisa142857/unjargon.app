@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { api, bounceToApiOrigin } from "@/lib/api";
 import AccountMenu from "@/app/account-menu";
+import { AiCallConfirmButton } from "@/app/ai-confirm";
 
 export type WikiTerm = {
   id: number;
@@ -171,7 +172,7 @@ function TermRow({
       const res = await fetch(api(`/api/terms/${t.id}/expand`), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action }),
+        body: JSON.stringify({ action, confirmed: true }),
       });
       const data = await res.json().catch(() => null);
       if (!res.ok) throw new Error(data?.error ?? `expand failed (${res.status})`);
@@ -225,13 +226,12 @@ function TermRow({
           {!t.l2 && pending.concept ? (
             <p className="mt-3 animate-pulse text-sm text-neutral-500">queued — a connected collector is explaining this…</p>
           ) : !t.l2 ? (
-            <button
-              onClick={loadConcept}
+            <AiCallConfirmButton
+              action="concept"
+              term={t.term}
+              onConfirm={loadConcept}
               className="mt-3 rounded-md border border-neutral-700 px-2 py-1 text-xs text-neutral-400 hover:text-neutral-100"
-              title="asks your configured AI for a generic explanation — costs one AI call"
-            >
-              explain what this means · 1 AI call
-            </button>
+            />
           ) : (
             <Layer title="What it is" body={t.l2} loading={loading} error={error} />
           )}
@@ -242,13 +242,12 @@ function TermRow({
           ) : pending.grounding ? (
             <p className="mt-3 animate-pulse text-xs text-neutral-500">queued — a connected collector will explain this in your context…</p>
           ) : (
-            <button
-              onClick={loadGrounding}
+            <AiCallConfirmButton
+              action="grounding"
+              term={t.term}
+              onConfirm={loadGrounding}
               className="mt-3 rounded-md border border-neutral-700 px-2 py-1 text-xs text-neutral-400 hover:text-neutral-100"
-              title="reads this term's message from your stream and explains it in your context — costs one AI call"
-            >
-              explain in my sessions · 1 AI call
-            </button>
+            />
           )}
         </div>
       )}

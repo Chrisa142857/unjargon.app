@@ -61,8 +61,16 @@ assert.equal((await db.insert(tables.terms).values(termValues).onConflictDoNothi
 const [term] = await db.select().from(tables.terms).where(eq(tables.terms.key, "bdf"));
 await db.insert(tables.termSightings).values({ termId: term.id, messageId: stored[0].id });
 await db.insert(tables.annotations).values({ messageId: stored[0].id, termId: term.id, span: "BDF", sentenceRewrite: "Detected." });
-await db.insert(tables.expansionRequests).values({ termId: term.id, userId: user.id, grounding: true });
-assert.equal((await db.insert(tables.expansionRequests).values({ termId: term.id, userId: user.id, grounding: true }).onConflictDoNothing().returning()).length, 0);
+const [confirmedRequest] = await db
+  .insert(tables.expansionRequests)
+  .values({ termId: term.id, userId: user.id, grounding: true, confirmedAt: now })
+  .returning();
+assert.equal(confirmedRequest.confirmedAt?.toISOString(), now.toISOString());
+assert.equal((await db.insert(tables.expansionRequests).values({ termId: term.id, userId: user.id, grounding: true, confirmedAt: now }).onConflictDoNothing().returning()).length, 0);
+assert.throws(
+  () => sqlite.prepare("INSERT INTO expansion_requests (term_id, user_id, grounding) VALUES (?, ?, ?)").run(term.id, user.id, 0),
+  /AI confirmation required/,
+);
 
 const [aggregate] = await db
   .select({

@@ -13,7 +13,8 @@ digests.
 - Paths, URLs, flags, commands, package/module names, filenames, and code
   identifiers are deliberately excluded from detection.
 - Opening a term never calls AI. The two visible explanation buttons are the
-  only AI entrypoints and are labelled `· 1 AI call`.
+  only AI entrypoints; each opens a warning and requires a separate
+  `Confirm & use 1 AI call` click.
 
 ## Deployment
 
@@ -67,14 +68,17 @@ instead of a false one-hour completion estimate.
 `translated_at`, subtitle fields, digest table, and keyword rows remain in the
 fresh D1 baseline for compatibility with the current app data shape. New
 UI/API paths do not use the legacy fields. `web/drizzle/` is the archived
-Postgres migration history; apply only `web/d1/0000_init.sql` to a fresh D1.
+Postgres migration history; use `web/d1/0000_init.sql` for a fresh D1 and the
+numbered `web/d1/` upgrades for an existing one.
 
 ## AI calls
 
 Automatic detection has no model call on Render or the collector.
 
 - `POST /api/terms/:id/expand` requires `{action:"concept"}` or
-  `{action:"grounding"}`. Missing action returns 400.
+  `{action:"grounding"}` plus `confirmed:true`; missing confirmation returns
+  428. `expansion_requests.confirmed_at` expires after 10 minutes, so legacy
+  or stale queued work cannot make a local CLI call later.
 - `GET /api/terms/:id/expand` only reads cached/pending state; it cannot queue
   or generate an explanation.
 - Server AI requires both `UNJARGON_ALLOW_SERVER_AI=1` and
