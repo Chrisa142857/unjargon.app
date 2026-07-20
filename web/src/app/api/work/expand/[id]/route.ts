@@ -3,9 +3,8 @@ import { completeExpansionWork } from "@/lib/expand";
 
 export const dynamic = "force-dynamic";
 
-// Deliver one completed expansion: {text}. The server stores it on the
-// shared term (L2) or the requesting user's own layer (L3) and drops the
-// queue row.
+// Deliver one completed, user-confirmed in-session explanation and drop its
+// queue row. Shared generic AI explanations are not supported.
 export async function POST(
   req: Request,
   { params }: { params: Promise<{ id: string }> },

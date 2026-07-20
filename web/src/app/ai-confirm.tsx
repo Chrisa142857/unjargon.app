@@ -3,20 +3,19 @@
 import { useEffect, useRef, useState } from "react";
 
 export function AiCallConfirmButton({
-  action,
   term,
+  source,
   onConfirm,
   className,
 }: {
-  action: "concept" | "grounding";
   term: string;
+  source: "selected" | "latest";
   onConfirm: () => Promise<void>;
   className?: string;
 }) {
   const [open, setOpen] = useState(false);
   const [confirming, setConfirming] = useState(false);
   const confirmRef = useRef<HTMLButtonElement>(null);
-  const inContext = action === "grounding";
 
   useEffect(() => {
     if (!open) return;
@@ -46,7 +45,7 @@ export function AiCallConfirmButton({
         className={className}
         title="opens a confirmation before any AI call"
       >
-        {inContext ? "explain in my sessions" : "explain what this means"} · 1 AI call
+        explain in my sessions · 1 AI call
       </button>
       {open && (
         <div className="fixed inset-0 z-50 grid place-items-center bg-black/70 p-4">
@@ -62,9 +61,9 @@ export function AiCallConfirmButton({
               it can count against the Claude Code or Codex account signed in there.
             </p>
             <p className="mt-2 text-sm leading-6 text-neutral-400">
-              {inContext
-                ? "A short excerpt from your selected agent message is included for an in-context explanation."
-                : "Only the detected term and its detector note are used for this generic explanation."}
+              {source === "selected"
+                ? "A short excerpt from this agent message is included for an in-context explanation."
+                : "A short excerpt from your most recent agent message containing this term is included for an in-context explanation."}
             </p>
             <p className="mt-2 text-xs leading-5 text-neutral-500">
               Local explanations are capped at 30 requests (at most 15 minutes) per rolling 5 hours.

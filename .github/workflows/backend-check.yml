@@ -42,6 +42,7 @@ jobs:
           expect 401 POST /api/status '{"budget_used":0,"budget_limit":30}'
           expect 401 POST /api/terms/1/expand '{}'
           expect 401 GET  /api/terms/1/expand
+          expect 401 GET  /api/terms/1/reference
           expect 401 POST /api/terms/1/learned
           expect 401 GET  /api/settings
           echo "--- OAuth start (needs GOOGLE_* env on Render) ---"
@@ -72,7 +73,7 @@ jobs:
           echo "$(wc -l < chunks.txt) chunks referenced"
           : > bundle.js
           while read -r c; do curl -s --max-time 20 "https://chrisa142857.github.io$c" >> bundle.js; done < chunks.txt
-          for marker in 'explain what this means' 'explain in my sessions' 'Finding jargon in your history'; do
+          for marker in 'Basic reference' 'Search Google' 'explain in my sessions' 'Finding jargon in your history'; do
             if grep -q "$marker" bundle.js live.html; then echo "OK   frontend has: $marker"; else echo "FAIL frontend missing: $marker (stale Pages build?)"; fail=1; fi
           done
           exit $fail

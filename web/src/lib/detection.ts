@@ -5,7 +5,7 @@ import { detectJargon } from "@/lib/detect";
 
 // Fifty rows bounds D1 work without increasing the daily Free-plan allowance.
 const BATCH_SIZE = 50;
-const L1 = "Detected without AI. Select this term if you want an explanation.";
+const L1 = "Detected without AI. Open the public reference for a basic definition.";
 export const detectionDailyLimit = (() => {
   // Conservative Free-plan default. Increase only after checking D1 Row Metrics.
   const value = Number(process.env.D1_DAILY_DETECTION_MESSAGES ?? 1_000);
@@ -182,7 +182,7 @@ async function storeDetection(
       .values({
         messageId: message.id,
         span,
-        sentenceRewrite: "Detected jargon — select the term for an explanation.",
+        sentenceRewrite: "Detected jargon — open the term for a public reference.",
         termId: term.id,
       })
       .returning();

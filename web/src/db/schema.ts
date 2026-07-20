@@ -88,7 +88,9 @@ export const digests = sqliteTable(
   (t) => [uniqueIndex("digests_session_from").on(t.sessionId, t.fromMessageId)],
 );
 
-// A jargon term with detector note L1 plus optional AI L2/L3 explanations.
+// A jargon term with detector note L1. l2/l3 on this legacy table remain for
+// backwards compatibility; new public references are fetched on demand and
+// in-session AI explanations live only in userTerms.l3.
 // Shared terms are generic natural-language vocabulary only. Legacy keyword
 // rows are hidden: artifacts, flags, commands, packages, and identifiers are
 // not jargon.
@@ -109,8 +111,8 @@ export const terms = sqliteTable("terms", {
   createdAt: timestamp("created_at").defaultNow().notNull(),
 }, (t) => [uniqueIndex("terms_owner_key").on(sql`coalesce(${t.userId}, 0)`, t.key)]);
 
-// User-specific state. L1/L2 remain shared generic glossary entries; L3 is
-// grounded in a user's transcript and must never be shared.
+// User-specific state. An L3 explanation is grounded in a user's transcript
+// and must never be shared.
 export const userTerms = sqliteTable("user_terms", {
   userId: integer("user_id").notNull().references(() => users.id),
   termId: integer("term_id").notNull().references(() => terms.id),
@@ -136,11 +138,9 @@ export const termSightings = sqliteTable("term_sightings", {
   messageId: integer("message_id").notNull().references(() => messages.id),
 }, (t) => [uniqueIndex("term_sightings_term_message").on(t.termId, t.messageId)]);
 
-// Queued expansion work for no-key servers: a user asked for a term's L2
-// (grounding=false, shared once generated) or L3 (grounding=true, their own
-// in-context layer). Served to the requesting user's own collector, which
-// runs it within the local AI budget; only a recent, explicit confirmation is
-// claimable, and the row is deleted on completion.
+// Queued expansion work for no-key servers. The D1 trigger permits only
+// grounding=true: an explicitly confirmed, in-session explanation served to
+// the requesting user's own collector and deleted on completion.
 export const expansionRequests = sqliteTable("expansion_requests", {
   id: integer("id").primaryKey({ autoIncrement: true }),
   termId: integer("term_id").notNull().references(() => terms.id),

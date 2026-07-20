@@ -16,7 +16,6 @@ export async function GET(req: Request) {
       domain: tables.terms.domain,
       kind: tables.terms.kind,
       l1: tables.terms.l1,
-      l2: tables.terms.l2,
       l3: tables.userTerms.l3,
       salience: tables.terms.salience,
       sightings: countDistinct(tables.termSightings.messageId),

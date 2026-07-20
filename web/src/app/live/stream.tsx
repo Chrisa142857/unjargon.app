@@ -6,6 +6,8 @@ import { api, apiBase, apiBaseIsBuiltIn, bounceToApiOrigin, setApiBase } from "@
 import type { ClientStreamEvent } from "@/lib/bus";
 import AccountMenu from "@/app/account-menu";
 import { AiCallConfirmButton } from "@/app/ai-confirm";
+import { TermReference } from "@/app/term-reference";
+import { zeroAiTermNote } from "@/lib/reference";
 
 export type LiveAnnotation = {
   id: number;
@@ -20,7 +22,6 @@ export type LiveTerm = {
   domain: string;
   kind: string; // "term" | "initial"
   l1: string;
-  l2: string | null;
   l3: string | null;
   salience: number | null;
   learnedAt: string | null; // opened at least once → chip dims
@@ -356,11 +357,11 @@ export default function LiveStream() {
     }).catch(() => {});
   }
 
-  // Cache lazily fetched L2/L3 so a term opens instantly the next time.
-  function cacheExpansion(termId: number, l2: string | null, l3: string | null) {
+  // Cache the explicitly requested in-session explanation.
+  function cacheExpansion(termId: number, l3: string | null) {
     setTerms((prev) =>
       prev.map((t) =>
-        t.id === termId ? { ...t, l2: l2 ?? t.l2, l3: l3 ?? t.l3 } : t,
+        t.id === termId ? { ...t, l3: l3 ?? t.l3 } : t,
       ),
     );
   }
@@ -447,7 +448,6 @@ export default function LiveStream() {
                 domain: t.domain,
                 kind: t.kind,
                 l1: t.l1,
-                l2: null,
                 l3: null,
                 salience: t.salience,
                 learnedAt: null,
@@ -661,7 +661,7 @@ function MessageRow({
 }: {
   message: LiveMessage;
   termsById: Map<number, LiveTerm>;
-  onTermExpanded: (termId: number, l2: string | null, l3: string | null) => void;
+  onTermExpanded: (termId: number, l3: string | null) => void;
   onTermLearned: (termId: number) => void;
 }) {
   const [activeTermId, setActiveTermId] = useState<number | null>(null);
@@ -737,10 +737,8 @@ function MessageRow({
   );
 }
 
-// The term card, two stages. Collapsed: just the picked term and its
-// one-line explanation. Opened: the long in-context explanation (grounded in
-// this message), with the general background beneath — lazily generated and
-// cached the first time anyone opens it.
+// The term card is safe to open: it shows a public zero-AI reference first.
+// An in-session explanation remains a separate, confirmed action.
 function InlineTermCard({
   term,
   messageId,
@@ -751,24 +749,23 @@ function InlineTermCard({
   term: LiveTerm;
   messageId?: number; // omitted → L3 grounds in the term's latest sighting
   onClose: () => void;
-  onExpanded: (termId: number, l2: string | null, l3: string | null) => void;
+  onExpanded: (termId: number, l3: string | null) => void;
   onLearned: (termId: number) => void;
 }) {
   const [open, setOpen] = useState(false);
-  const [loading, setLoading] = useState(false);
   const [grounding, setGrounding] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  // On a no-key server the work is queued for the user's own collector; the
-  // card polls while any layer is pending so the text appears when delivered.
-  const [pending, setPending] = useState({ concept: false, grounding: false });
+  // On a no-key server the confirmed in-session work is queued for the
+  // user's collector; poll until it returns.
+  const [pending, setPending] = useState({ grounding: false });
 
   async function refresh() {
     try {
       const res = await fetch(api(`/api/terms/${term.id}/expand`));
       const data = await res.json().catch(() => null);
       if (!res.ok) throw new Error(data?.error ?? `expand failed (${res.status})`);
-      setPending(data.pending ?? { concept: false, grounding: false });
-      onExpanded(term.id, data.l2, data.l3);
+      setPending(data.pending ?? { grounding: false });
+      onExpanded(term.id, data.l3);
     } catch (err) {
       setError(String(err));
     }
@@ -783,22 +780,22 @@ function InlineTermCard({
     };
   });
   useEffect(() => {
-    if (!open || (!pending.concept && !pending.grounding)) return;
+    if (!open || !pending.grounding) return;
     const timer = window.setInterval(() => pollRef.current(), 5000);
     return () => window.clearInterval(timer);
-  }, [open, pending.concept, pending.grounding]);
+  }, [open, pending.grounding]);
 
-  async function requestExplanation(action: "concept" | "grounding") {
+  async function requestExplanation() {
     try {
       const res = await fetch(api(`/api/terms/${term.id}/expand`), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ messageId, action, confirmed: true }),
+        body: JSON.stringify({ messageId, action: "grounding", confirmed: true }),
       });
       const data = await res.json().catch(() => null);
       if (!res.ok) throw new Error(data?.error ?? `expand failed (${res.status})`);
-      setPending(data.pending ?? { concept: false, grounding: false });
-      onExpanded(term.id, data.l2, data.l3);
+      setPending(data.pending ?? { grounding: false });
+      onExpanded(term.id, data.l3);
     } catch (err) {
       setError(String(err));
     }
@@ -813,19 +810,11 @@ function InlineTermCard({
     if (next) onLearned(term.id);
   }
 
-  async function loadConcept() {
-    if (loading) return;
-    setLoading(true);
-    setError(null);
-    await requestExplanation("concept");
-    setLoading(false);
-  }
-
   async function loadGrounding() {
     if (grounding) return;
     setGrounding(true);
     setError(null);
-    await requestExplanation("grounding");
+    await requestExplanation();
     setGrounding(false);
   }
 
@@ -841,31 +830,20 @@ function InlineTermCard({
             <span className={`ml-2 text-xs ${c.caption}`}>{term.domain}</span>
           </p>
           <p className="mt-0.5 text-sm leading-relaxed text-neutral-300">
-            {term.l1}
+            {zeroAiTermNote(term.kind)}
           </p>
           {!open && <p className="mt-1 text-xs text-neutral-500">more ▸</p>}
         </button>
-        {/* opened: detector result, then explicitly requested AI layers */}
+        {/* Opened: public reference, then an explicitly requested AI layer. */}
         {open && (
           <div className="border-t border-white/[0.06] px-3.5 py-3 text-sm leading-relaxed">
+            <TermReference
+              id={term.id}
+              term={term.term}
+              kind={term.kind}
+              wikiHref={`/wiki?term=${term.id}`}
+            />
             {error && <p className="text-red-400/90">couldn&apos;t load — {error}</p>}
-            {loading ? (
-              <div className="animate-pulse space-y-2" aria-label="loading">
-                <div className="h-3 w-full rounded bg-neutral-800" />
-                <div className="h-3 w-5/6 rounded bg-neutral-800" />
-              </div>
-            ) : term.l2 ? (
-              <p className="text-neutral-200">{term.l2}</p>
-            ) : pending.concept ? (
-              <p className="animate-pulse text-neutral-500">queued — a connected collector is explaining this…</p>
-            ) : !error ? (
-              <AiCallConfirmButton
-                action="concept"
-                term={term.term}
-                onConfirm={loadConcept}
-                className="rounded-md border border-neutral-700 px-2 py-1 text-xs text-neutral-400 hover:text-neutral-100"
-              />
-            ) : null}
             {term.l3 ? (
               <div className="mt-3 border-t border-white/[0.06] pt-2">
                 <p className="text-[10px] uppercase tracking-widest text-neutral-500">in your sessions</p>
@@ -880,8 +858,8 @@ function InlineTermCard({
               <p className="mt-3 animate-pulse text-xs text-neutral-500">queued — a connected collector will explain this in your context…</p>
             ) : (
               <AiCallConfirmButton
-                action="grounding"
                 term={term.term}
+                source={messageId ? "selected" : "latest"}
                 onConfirm={loadGrounding}
                 className="mt-3 rounded-md border border-neutral-700 px-2 py-1 text-xs text-neutral-400 hover:text-neutral-100"
               />
@@ -997,7 +975,7 @@ function ChipBoard({
   onLearned,
 }: {
   terms: LiveTerm[];
-  onExpanded: (termId: number, l2: string | null, l3: string | null) => void;
+  onExpanded: (termId: number, l3: string | null) => void;
   onLearned: (termId: number) => void;
 }) {
   const [activeTermId, setActiveTermId] = useState<number | null>(null);
@@ -1116,7 +1094,7 @@ function ChipBoard({
         </p>
         {hero && (
           <p className="mt-1.5 line-clamp-2 text-sm leading-relaxed text-neutral-400">
-            {t.l1}
+            {zeroAiTermNote(t.kind)}
           </p>
         )}
       </button>

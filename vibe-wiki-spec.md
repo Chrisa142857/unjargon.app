@@ -3,6 +3,10 @@
 Target users: vibe coders & vibe researchers · Hackathon category: Work & Productivity
 Supersedes `prototype-spec.md` (Mac-native v1). Product concept, UX layers, and extraction design carry over; deployment architecture is new.
 
+> Historical planning document. The shipping app uses zero-AI public
+> Wikipedia/Google references instead of the generic L2 AI layer described
+> below; only a user-confirmed in-session explanation can call AI.
+
 ---
 
 ## 1. What Changed and Why

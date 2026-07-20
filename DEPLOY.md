@@ -57,12 +57,24 @@ https://unjargon-d1.<your-subdomain>.workers.dev/query
 `web/d1/0000_init.sql` is a fresh D1 baseline. Do **not** run the old
 `web/drizzle/` Postgres migrations on D1.
 
-For an existing `unjargon` D1 database, apply each numbered D1 upgrade before
-deploying the matching Render code. The current consent upgrade is:
+The current `0000_init.sql` is a complete baseline: a newly created database
+does **not** run upgrades after it. For an older deployed database, apply only
+the upgrades it is missing. `0001` is needed only when
+`expansion_requests.confirmed_at` does not exist; `0002` is safe to apply once
+after the code deploy and removes generic AI concept work:
 
 ```sh
+# Older database without expansion_requests.confirmed_at only:
 npx wrangler d1 execute unjargon --remote --file=../web/d1/0001_expand_consent.sql
+
+# This release's generic-AI removal:
+npx wrangler d1 execute unjargon --remote --file=../web/d1/0002_remove_generic_concept_queue.sql
 ```
+
+For the `0002` release, first deploy the code that rejects generic AI work and
+filters it from the collector queue; then apply `0002` to delete stale generic
+jobs and block a retired server version. That ordering avoids a brief window
+where old server-side AI code could bypass the queue trigger.
 
 ## 2. Configure Render
 
@@ -80,6 +92,11 @@ APP_URL=https://unjargon.onrender.com
 Server AI requires both `UNJARGON_ALLOW_SERVER_AI=1` and
 `ANTHROPIC_API_KEY`. Leave the opt-in flag unset for a zero-cost deployment;
 there is no `DATABASE_URL` and no shared `INGEST_TOKEN`.
+
+Public term references need no additional key or service: opening a term
+looks up a Wikipedia summary using only the term, and Google is a normal
+outbound search link. Neither action sends transcript text or calls AI. The
+only model path is a user-confirmed **explain in my sessions** request.
 
 Deploy the Worker, set the Render variables, then deploy Render. The
 container fails fast if either D1 gateway setting is missing, avoiding an
@@ -144,6 +161,7 @@ the secure auth cookie.
 cd web
 npm run check:d1
 npm run check:detector
+npm run check:reference
 npm run lint
 npx tsc --noEmit
 npm run build

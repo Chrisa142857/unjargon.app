@@ -1,4 +1,9 @@
-import { AIConfirmationRequired, expandTerm, LocalExplainerUnavailable } from "@/lib/expand";
+import {
+  AIConfirmationRequired,
+  expandTerm,
+  LocalExplainerUnavailable,
+  TermNotInYourSessions,
+} from "@/lib/expand";
 import { requireUser } from "@/lib/auth";
 
 export const dynamic = "force-dynamic";
@@ -34,17 +39,22 @@ export async function POST(
   }
 
   let messageId: number | undefined;
-  let action: "concept" | "grounding" | undefined;
+  let action: "grounding" | undefined;
   let confirmed = false;
   try {
     const body = await req.json();
     if (Number.isInteger(body?.messageId)) messageId = body.messageId;
-    if (body?.action === "concept" || body?.action === "grounding") action = body.action;
+    if (body?.action === "grounding") action = body.action;
     confirmed = body?.confirmed === true;
   } catch {
     return Response.json({ error: "missing explicit action" }, { status: 400 });
   }
-  if (!action) return Response.json({ error: "missing explicit action" }, { status: 400 });
+  if (!action) {
+    return Response.json(
+      { error: "only in-session AI explanations are available" },
+      { status: 400 },
+    );
+  }
   if (!confirmed) {
     return Response.json({ error: "confirm this AI call before requesting an explanation" }, { status: 428 });
   }
@@ -68,6 +78,9 @@ export async function POST(
         { error: "No connected collector has local explanations enabled. Enable it on a collector, then try again." },
         { status: 409 },
       );
+    }
+    if (err instanceof TermNotInYourSessions) {
+      return Response.json({ error: "term not found in your sessions" }, { status: 404 });
     }
     console.error(`[expand] term ${termId} failed:`, err);
     return Response.json({ error: "expansion failed" }, { status: 502 });

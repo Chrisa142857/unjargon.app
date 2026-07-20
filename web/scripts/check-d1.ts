@@ -8,6 +8,9 @@ import * as tables from "../src/db/schema.ts";
 const sqlite = new DatabaseSync(":memory:");
 sqlite.exec("PRAGMA foreign_keys = ON");
 sqlite.exec(readFileSync(new URL("../d1/0000_init.sql", import.meta.url), "utf8"));
+// The latest baseline already has this guard, but reapplying the release
+// migration must also be safe for a provisioner that does so.
+sqlite.exec(readFileSync(new URL("../d1/0002_remove_generic_concept_queue.sql", import.meta.url), "utf8"));
 
 const db = drizzle(async (sql, params, method) => {
   const statement = sqlite.prepare(sql);
@@ -68,9 +71,38 @@ const [confirmedRequest] = await db
 assert.equal(confirmedRequest.confirmedAt?.toISOString(), now.toISOString());
 assert.equal((await db.insert(tables.expansionRequests).values({ termId: term.id, userId: user.id, grounding: true, confirmedAt: now }).onConflictDoNothing().returning()).length, 0);
 assert.throws(
-  () => sqlite.prepare("INSERT INTO expansion_requests (term_id, user_id, grounding) VALUES (?, ?, ?)").run(term.id, user.id, 0),
+  () => sqlite.prepare("INSERT INTO expansion_requests (term_id, user_id, grounding) VALUES (?, ?, ?)").run(term.id, user.id, 1),
   /AI confirmation required/,
 );
+assert.throws(
+  () => sqlite.prepare("INSERT INTO expansion_requests (term_id, user_id, grounding, confirmed_at) VALUES (?, ?, ?, ?)").run(term.id, user.id, 0, now.getTime()),
+  /only in-session AI explanations are supported/,
+);
+
+// Exercise the upgrade itself against the pre-0002 queue shape: it removes
+// only retired generic jobs and rejects any later attempt to recreate them.
+const legacyQueue = new DatabaseSync(":memory:");
+legacyQueue.exec(`
+  CREATE TABLE expansion_requests (
+    id integer PRIMARY KEY,
+    term_id integer NOT NULL,
+    user_id integer NOT NULL,
+    grounding integer NOT NULL,
+    confirmed_at integer
+  );
+  INSERT INTO expansion_requests (id, term_id, user_id, grounding, confirmed_at)
+  VALUES (1, 1, 1, 0, 1), (2, 1, 1, 1, 1);
+`);
+legacyQueue.exec(readFileSync(new URL("../d1/0002_remove_generic_concept_queue.sql", import.meta.url), "utf8"));
+assert.equal(
+  (legacyQueue.prepare("SELECT count(*) AS count FROM expansion_requests WHERE grounding = 0").all()[0] as { count: number }).count,
+  0,
+);
+assert.throws(
+  () => legacyQueue.prepare("INSERT INTO expansion_requests (id, term_id, user_id, grounding, confirmed_at) VALUES (3, 1, 1, 0, 1)").run(),
+  /only in-session AI explanations are supported/,
+);
+legacyQueue.close();
 
 const [aggregate] = await db
   .select({

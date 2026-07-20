@@ -12,9 +12,10 @@ digests.
 - Terms, acronyms, and their message spans become clickable chips.
 - Paths, URLs, flags, commands, package/module names, filenames, and code
   identifiers are deliberately excluded from detection.
-- Opening a term never calls AI. The two visible explanation buttons are the
-  only AI entrypoints; each opens a warning and requires a separate
-  `Confirm & use 1 AI call` click.
+- Opening a term can fetch a public Wikipedia summary and show Google and
+  Wikipedia links. It sends only the detected term and never calls AI.
+- The one visible **explain in my sessions** button is the only AI entrypoint;
+  it opens a warning and requires a separate `Confirm & use 1 AI call` click.
 
 ## Deployment
 
@@ -51,6 +52,9 @@ digests.
 5. Detector results upsert only shared generic `term` / `initial` rows,
    create sightings + neutral annotations, set `messages.detected_at` as the
    processed marker, and publish a `detection` SSE event.
+6. Opening a detected term requests a public Wikipedia summary using only the
+   term. The UI also offers direct Google and Wikipedia links; none of these
+   reference actions use AI or transcript text.
 
 On D1 Free, collector requests are split to 20 messages and the server uses
 conservative daily import/detection ceilings. Backlog is paused—not skipped—at
@@ -68,17 +72,18 @@ instead of a false one-hour completion estimate.
 `translated_at`, subtitle fields, digest table, and keyword rows remain in the
 fresh D1 baseline for compatibility with the current app data shape. New
 UI/API paths do not use the legacy fields. `web/drizzle/` is the archived
-Postgres migration history; use `web/d1/0000_init.sql` for a fresh D1 and the
-numbered `web/d1/` upgrades for an existing one.
+Postgres migration history; use `web/d1/0000_init.sql` alone for a fresh D1.
+Apply a numbered `web/d1/` upgrade only when an older deployment is missing
+that exact schema change.
 
 ## AI calls
 
 Automatic detection has no model call on Render or the collector.
 
-- `POST /api/terms/:id/expand` requires `{action:"concept"}` or
-  `{action:"grounding"}` plus `confirmed:true`; missing confirmation returns
-  428. `expansion_requests.confirmed_at` expires after 10 minutes, so legacy
-  or stale queued work cannot make a local CLI call later.
+- `POST /api/terms/:id/expand` accepts only `{action:"grounding"}` plus
+  `confirmed:true`; missing confirmation returns 428. Generic AI concept work
+  is rejected. `expansion_requests.confirmed_at` expires after 10 minutes, so
+  stale queued work cannot make a local CLI call later.
 - `GET /api/terms/:id/expand` only reads cached/pending state; it cannot queue
   or generate an explanation.
 - Server AI requires both `UNJARGON_ALLOW_SERVER_AI=1` and
@@ -105,9 +110,10 @@ Automatic detection has no model call on Render or the collector.
 | `web/src/db/` | SQLite schema plus Render-to-D1 Worker proxy client |
 | `web/d1/0000_init.sql` | fresh, idempotent Cloudflare D1 baseline |
 | `d1-worker/` | authenticated Worker that is the only D1 binding holder |
-| `web/src/lib/expand.ts` | explicit-only L2/L3 explanation flow |
-| `web/src/app/live/stream.tsx` | raw stream, detection progress, explicit buttons |
-| `web/src/app/wiki/wiki.tsx` | same explicit explanation rule in the wiki |
+| `web/src/lib/expand.ts` | explicit-only in-session explanation flow |
+| `web/src/app/term-reference.tsx` | zero-AI public Wikipedia/Google references |
+| `web/src/app/live/stream.tsx` | raw stream, detection progress, references, explicit AI button |
+| `web/src/app/wiki/wiki.tsx` | term pages, references, and the same explicit AI rule |
 | `collector/` | transcript discovery/redaction/shipping; optional expansion worker only |
 | `install.sh` | macOS/Linux installation and zero-AI user-facing notice |
 
@@ -117,6 +123,7 @@ Automatic detection has no model call on Render or the collector.
 cd web
 npm run check:d1
 npm run check:detector
+npm run check:reference
 npm run lint
 npx tsc --noEmit
 npm run build
@@ -135,7 +142,8 @@ cd collector && gofmt -w cmd/unjargond/main.go internal/aicli/aicli.go internal/
 
 ## Next practical step
 
-Publish this large-history fix, trigger a collector release, and reinstall it
-on a test macOS and Linux machine. Pair it, import existing Claude Code and
-Codex history, and use `/live` to confirm the shared daily-window progress and
-automatic next-day resume.
+Deploy the code that rejects generic AI work first, then apply
+`web/d1/0002_remove_generic_concept_queue.sql` to delete stale generic jobs
+and block old clients. Then pair a test macOS and Linux collector, import
+Claude Code and Codex history, open a term's public reference, and confirm
+that only an explicitly confirmed in-session explanation can use AI.

@@ -2,6 +2,10 @@
 ### A macOS learning layer for Claude Code & Codex
 Target users: vibe coders & vibe researchers · Hackathon category: Work & Productivity
 
+> Historical planning document. The shipping app uses zero-AI public
+> Wikipedia/Google references instead of the generic L2 AI layer described
+> below; only a user-confirmed in-session explanation can call AI.
+
 ---
 
 ## 1. Product in One Paragraph

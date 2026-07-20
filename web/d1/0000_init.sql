@@ -128,6 +128,18 @@ WHEN NEW."confirmed_at" IS NULL
 BEGIN
   SELECT RAISE(ABORT, 'AI confirmation required');
 END;
+CREATE TRIGGER IF NOT EXISTS "expansion_requests_require_grounding"
+BEFORE INSERT ON "expansion_requests"
+WHEN NEW."grounding" != 1
+BEGIN
+  SELECT RAISE(ABORT, 'only in-session AI explanations are supported');
+END;
+CREATE TRIGGER IF NOT EXISTS "expansion_requests_require_grounding_on_update"
+BEFORE UPDATE OF "grounding" ON "expansion_requests"
+WHEN NEW."grounding" != 1
+BEGIN
+  SELECT RAISE(ABORT, 'only in-session AI explanations are supported');
+END;
 
 CREATE TABLE IF NOT EXISTS "settings" (
   "key" text PRIMARY KEY NOT NULL,

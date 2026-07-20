@@ -12,7 +12,8 @@ short_description: Zero-AI jargon detection for Claude Code and Codex
 
 # unjargon.app
 
-> Find the technical terms your agents use. Explain one only when you choose.
+> Find the technical terms your agents use. Get a public reference for free,
+> then ask for an in-context explanation only when you choose.
 
 unjargon watches Claude Code and Codex transcripts on macOS and Linux, sends
 redacted assistant messages to your account, and builds a live jargon board.
@@ -33,12 +34,15 @@ History import and jargon detection make **zero AI calls**. The server uses:
 The dataset is bundled in `web/data/`; its source and license are recorded in
 [`web/data/README.md`](web/data/README.md). Rare-word frequency is not used as
 an automatic chip source: it measures unfamiliarity, not whether a word has a
-distinct glossary meaning.
+distinct glossary meaning. Opening a detected term can show a public Wikipedia
+summary plus Google and Wikipedia links. That lookup sends only the detected
+term, never a transcript, and makes no AI call.
 
-When a user taps **“explain what this means · 1 AI call”** or **“explain in my
-sessions · 1 AI call”**, unjargon first shows a per-request confirmation that
-warns about local Claude Code/Codex usage and the in-context excerpt. Only a
-confirmed request can reach AI. unjargon uses server AI only when both
+When a user taps **“explain in my sessions · 1 AI call”**, unjargon first shows
+a per-request confirmation that warns about local Claude Code/Codex usage and
+the selected excerpt—or the most recent matching message when the user opens a
+glossary term. Only a confirmed request can reach AI.
+unjargon uses server AI only when both
 `UNJARGON_ALLOW_SERVER_AI=1` and `ANTHROPIC_API_KEY` are configured; otherwise
 it queues that single request for the paired collector's local AI CLI. Leave
 the opt-in flag unset for a zero-cost deployment. No card opening, transcript
@@ -80,6 +84,7 @@ cd web
 npm install
 npm run check:d1
 npm run check:detector
+npm run check:reference
 npm run lint
 npm run dev
 
@@ -89,8 +94,9 @@ go build -o unjargond ./cmd/unjargond
 ```
 
 Server AI needs both `UNJARGON_ALLOW_SERVER_AI=1` and `ANTHROPIC_API_KEY` and
-is used only by explicit explanation buttons. `UNJARGON_FAKE_TRANSLATOR=1`
-provides deterministic, on-demand explanation text for demos.
+is used only by the explicit, confirmed in-session explanation button.
+`UNJARGON_FAKE_TRANSLATOR=1` provides deterministic, on-demand explanation
+text for demos.
 
 See [`HANDOFF.md`](HANDOFF.md) for current deployment and implementation notes.
 See [`DEPLOY.md`](DEPLOY.md) to create the free D1 database and Worker gateway.

@@ -3,6 +3,10 @@
 Target users: vibe coders & vibe researchers · Hackathon category: Work & Productivity
 Supersedes `vibe-wiki-spec.md` (v2). Architecture (Go collector + Next.js web app) carries over unchanged; this version renames the product and re-centers the feature hierarchy around **unjargoning** as the killer feature.
 
+> Historical planning document. The shipping app uses zero-AI public
+> Wikipedia/Google references instead of the generic L2 AI layer described
+> below; only a user-confirmed in-session explanation can call AI.
+
 ---
 
 ## 1. Feature Hierarchy (what changed from v2)
