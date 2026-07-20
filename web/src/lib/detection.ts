@@ -3,7 +3,9 @@ import { db, tables } from "@/db";
 import { publish, type DetectionEvent } from "@/lib/bus";
 import { corpusFor, detectJargon } from "@/lib/detect";
 
-const BATCH_SIZE = 10;
+// Fifty rows amortizes the remote D1 corpus query without increasing the
+// daily Free-plan allowance. Individual SQL statements remain small.
+const BATCH_SIZE = 50;
 const L1 = "Detected without AI. Select this term if you want an explanation.";
 export const detectionDailyLimit = (() => {
   // Conservative Free-plan default. Increase only after checking D1 Row Metrics.
@@ -19,28 +21,65 @@ export function utcDayStart() {
 const globalForDetection = globalThis as unknown as {
   __unjargonDetectionUsers?: Set<number>;
   __unjargonDetectionRequested?: Set<number>;
+  __unjargonDetectionWakeups?: Map<number, number>;
+  __unjargonDetectionDone?: Set<number>;
 };
 const running = (globalForDetection.__unjargonDetectionUsers ??= new Set());
 const requested = (globalForDetection.__unjargonDetectionRequested ??= new Set());
+const wakeups = (globalForDetection.__unjargonDetectionWakeups ??= new Map());
+const done = (globalForDetection.__unjargonDetectionDone ??= new Set());
+
+function nextUtcMidnight() {
+  const now = new Date();
+  return Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1) + 1_000;
+}
+
+function wakeAfterQuotaReset(userId: number) {
+  const until = nextUtcMidnight();
+  if ((wakeups.get(userId) ?? 0) >= until) return;
+  wakeups.set(userId, until);
+  // ponytail: this is in-process. The collector's status heartbeat and a
+  // /live reload also call scheduleDetection after a cold restart.
+  setTimeout(() => {
+    if (wakeups.get(userId) === until) wakeups.delete(userId);
+    scheduleDetection(userId);
+  }, Math.max(1_000, until - Date.now()));
+}
 
 // A bootstrap or ingest schedules one bounded batch. Re-scheduling after each
 // batch keeps a large history responsive while still finishing oldest-first.
-export function scheduleDetection(userId: number) {
+export function scheduleDetection(userId: number, newWork = false) {
+  if (newWork) done.delete(userId);
+  if (done.has(userId)) return;
+  const wakeup = wakeups.get(userId);
+  if (wakeup && wakeup > Date.now()) return;
+  if (wakeup) wakeups.delete(userId);
   if (running.has(userId)) {
     requested.add(userId);
     return;
   }
   running.add(userId);
   setTimeout(async () => {
-    let more = false;
+    let result: "done" | "more" | "quota" = "done";
+    let failed = false;
     try {
-      more = await detectBatch(userId);
+      result = await detectBatch(userId);
     } catch (err) {
+      failed = true;
       console.error(`[detect] user ${userId} batch failed:`, err);
     } finally {
       running.delete(userId);
     }
-    if (more || requested.delete(userId)) scheduleDetection(userId);
+    if (failed) {
+      requested.delete(userId);
+    } else if (result === "quota") {
+      requested.delete(userId);
+      wakeAfterQuotaReset(userId);
+    } else if (result === "more" || requested.delete(userId)) {
+      scheduleDetection(userId);
+    } else {
+      done.add(userId);
+    }
   }, 0);
 }
 
@@ -49,8 +88,9 @@ async function detectBatch(userId: number) {
     .select({ today: count(tables.messages.id) })
     .from(tables.messages)
     .where(gte(tables.messages.detectedAt, utcDayStart()));
-  const remaining = Math.max(0, detectionDailyLimit - Number(today));
-  if (remaining === 0) return false;
+  const usedToday = Number(today);
+  const remaining = Math.max(0, detectionDailyLimit - usedToday);
+  if (remaining === 0) return "quota" as const;
   const batchSize = Math.min(BATCH_SIZE, remaining);
   const rows = await db
     .select({ message: tables.messages })
@@ -60,7 +100,7 @@ async function detectBatch(userId: number) {
     .where(and(eq(tables.devices.userId, userId), isNull(tables.messages.detectedAt)))
     .orderBy(asc(tables.messages.ts), asc(tables.messages.id))
     .limit(batchSize);
-  if (rows.length === 0) return false;
+  if (rows.length === 0) return "done" as const;
 
   // ponytail: a recent per-user corpus is enough for weirdness scoring. Add
   // a maintained aggregate only if a large account makes this query visible.
@@ -73,14 +113,29 @@ async function detectBatch(userId: number) {
     .orderBy(desc(tables.messages.id))
     .limit(1000);
   const corpus = corpusFor(recent.map((row) => row.text));
-  for (const { message } of rows) await storeDetection(message, userId, corpus);
-  return rows.length === batchSize && remaining > rows.length;
+  const sharedTerms = new Map<string, SharedTerm>();
+  for (const [index, { message }] of rows.entries()) {
+    await storeDetection(message, userId, corpus, sharedTerms, usedToday + index + 1);
+  }
+  if (rows.length >= remaining) return "quota" as const;
+  return rows.length === batchSize ? "more" as const : "done" as const;
 }
+
+type SharedTerm = {
+  id: number;
+  term: string;
+  domain: string;
+  kind: string;
+  l1: string;
+  salience: number | null;
+};
 
 async function storeDetection(
   message: typeof tables.messages.$inferSelect,
   userId: number,
   corpus: ReturnType<typeof corpusFor>,
+  sharedTerms: Map<string, SharedTerm>,
+  dailyDetectionUsed: number,
 ) {
   // Only candidates from detectJargon reach this path. In particular, do not
   // re-match old glossary words against raw text: that would reintroduce
@@ -90,26 +145,30 @@ async function storeDetection(
 
   for (const detected of detectJargon(message.text, corpus)) {
     const key = detected.term.toLowerCase();
-    const [inserted] = await db
-      .insert(tables.terms)
-      .values({
-        key,
-        term: detected.term,
-        kind: detected.kind,
-        domain: detected.kind === "initial" ? "Acronym" : "Technical vocabulary",
-        l1: L1,
-        salience: detected.confidence,
-      })
-      .onConflictDoNothing()
-      .returning();
-    let term = inserted;
+    let term = sharedTerms.get(key);
     if (!term) {
-      [term] = await db
-        .select()
-        .from(tables.terms)
-        .where(and(eq(tables.terms.key, key), isNull(tables.terms.userId)));
+      const [inserted] = await db
+        .insert(tables.terms)
+        .values({
+          key,
+          term: detected.term,
+          kind: detected.kind,
+          domain: detected.kind === "initial" ? "Acronym" : "Technical vocabulary",
+          l1: L1,
+          salience: detected.confidence,
+        })
+        .onConflictDoNothing()
+        .returning();
+      term = inserted;
+      if (!term) {
+        [term] = await db
+          .select()
+          .from(tables.terms)
+          .where(and(eq(tables.terms.key, key), isNull(tables.terms.userId)));
+      }
     }
     if (!term) continue;
+    sharedTerms.set(key, term);
     byKey.set(key, { id: term.id, term: term.term });
     // The browser may not have this shared term yet, even when another user
     // created it first. It de-duplicates terms it already has.
@@ -157,6 +216,7 @@ async function storeDetection(
     type: "detection",
     messageId: message.id,
     sessionId: message.sessionId,
+    dailyDetectionUsed,
     annotations,
     newTerms,
   });

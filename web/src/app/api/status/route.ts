@@ -1,6 +1,7 @@
 import { eq } from "drizzle-orm";
 import { db, tables } from "@/db";
 import { deviceForRequest } from "@/lib/auth";
+import { scheduleDetection } from "@/lib/detection";
 
 export const dynamic = "force-dynamic";
 
@@ -29,5 +30,8 @@ export async function POST(req: Request) {
     .update(tables.devices)
     .set({ importStatus: status, lastSeenAt: new Date() })
     .where(eq(tables.devices.id, device.id));
+  // The collector heartbeats even when its history upload is complete. This
+  // wakes a parked free-tier backfill after midnight or a Render cold start.
+  scheduleDetection(device.userId as number);
   return Response.json({ ok: true });
 }

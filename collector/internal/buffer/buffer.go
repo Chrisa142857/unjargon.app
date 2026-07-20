@@ -4,6 +4,7 @@ package buffer
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -13,6 +14,10 @@ import (
 
 type Queue struct {
 	Dir string
+}
+
+type remainderError interface {
+	Remaining() []byte
 }
 
 func New(dir string) (*Queue, error) {
@@ -58,6 +63,12 @@ func (q *Queue) Flush(send func(raw []byte) error) (int, error) {
 			return sent, err
 		}
 		if err := send(data); err != nil {
+			var partial remainderError
+			if errors.As(err, &partial) && len(partial.Remaining()) > 0 {
+				if err := q.replace(path, partial.Remaining()); err != nil {
+					return sent, err
+				}
+			}
 			return sent, err
 		}
 		if err := os.Remove(path); err != nil {
@@ -66,6 +77,14 @@ func (q *Queue) Flush(send func(raw []byte) error) (int, error) {
 		sent++
 	}
 	return sent, nil
+}
+
+func (q *Queue) replace(path string, data []byte) error {
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, data, 0o600); err != nil {
+		return err
+	}
+	return os.Rename(tmp, path)
 }
 
 // Len reports how many batches are queued.

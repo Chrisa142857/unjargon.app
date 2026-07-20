@@ -34,8 +34,14 @@ const [device] = await db
 const [session] = await db
   .insert(tables.sessions)
   .values({ deviceId: device.id, tool: "codex", sessionKey: "session", cwd: "/tmp/project" })
-  .onConflictDoUpdate({ target: [tables.sessions.deviceId, tables.sessions.sessionKey], set: { sessionKey: "session" } })
   .returning();
+assert.equal(
+  (await db.insert(tables.sessions)
+    .values({ deviceId: device.id, tool: "codex", sessionKey: "session", cwd: "/tmp/project" })
+    .onConflictDoNothing()
+    .returning()).length,
+  0,
+);
 
 const messages = Array.from({ length: 20 }, (_, id) => ({
   sessionId: session.id,

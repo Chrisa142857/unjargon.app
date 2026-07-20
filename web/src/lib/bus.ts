@@ -7,6 +7,7 @@ import { EventEmitter } from "node:events";
 export type StreamMessage = {
   id: number;
   sessionId: number;
+  sessionCreated: boolean;
   device: string;
   tool: string;
   cwd: string | null;
@@ -41,6 +42,7 @@ export type ClientDetectionEvent = {
   type: "detection";
   messageId: number;
   sessionId: number;
+  dailyDetectionUsed: number;
   annotations: StreamAnnotation[];
   newTerms: StreamTerm[];
 };

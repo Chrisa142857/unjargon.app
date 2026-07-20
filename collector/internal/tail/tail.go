@@ -12,6 +12,10 @@ import (
 	"os"
 )
 
+// Keep a giant old transcript from becoming one in-memory import batch. The
+// next poll resumes at the saved byte offset, so no history is skipped.
+const maxReadBytes = 1 << 20
+
 type Tailer struct {
 	Path      string
 	offset    int64
@@ -63,7 +67,7 @@ func (t *Tailer) Poll() ([][]byte, error) {
 	if _, err := f.Seek(t.offset, io.SeekStart); err != nil {
 		return nil, err
 	}
-	buf, err := io.ReadAll(f)
+	buf, err := io.ReadAll(io.LimitReader(f, maxReadBytes))
 	if err != nil {
 		return nil, err
 	}

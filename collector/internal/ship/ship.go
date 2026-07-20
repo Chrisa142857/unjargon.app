@@ -6,8 +6,11 @@ package ship
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/chrisa142857/unjargon.app/collector/internal/parse"
@@ -35,6 +38,29 @@ type Batch struct {
 }
 
 const maxMessagesPerRequest = 20
+
+// RetryAfterError preserves the server's daily-cap backoff so a large
+// backfill stays on disk instead of retrying every collector poll.
+type RetryAfterError struct{ Until time.Time }
+
+func (e *RetryAfterError) Error() string {
+	return fmt.Sprintf("ingest paused until %s", e.Until.UTC().Format(time.RFC3339))
+}
+
+// PartialError contains only the unacknowledged tail of a chunked batch.
+// The offline queue replaces its current file with Remaining(), so successful
+// history chunks are never replayed after a free-tier pause.
+type PartialError struct {
+	Err   error
+	Batch Batch
+}
+
+func (e *PartialError) Error() string { return e.Err.Error() }
+func (e *PartialError) Unwrap() error { return e.Err }
+func (e *PartialError) Remaining() []byte {
+	data, _ := json.Marshal(e.Batch)
+	return data
+}
 
 // FromMessages builds a redacted batch for one tool. All messages must share
 // a session (the tailer works per transcript file, so this holds naturally).
@@ -78,7 +104,10 @@ func (s *Shipper) SendBatch(b Batch) error {
 			return err
 		}
 		if err := s.sendRaw(body); err != nil {
-			return err
+			return &PartialError{Err: err, Batch: Batch{
+				Device: b.Device, Tool: b.Tool, SessionID: b.SessionID, CWD: b.CWD,
+				Messages: b.Messages[start:],
+			}}
 		}
 	}
 	return nil
@@ -115,14 +144,38 @@ func (s *Shipper) sendRaw(body []byte) error {
 			lastErr = err
 			continue
 		}
+		if resp.StatusCode == http.StatusTooManyRequests {
+			until := retryAfter(resp.Header.Get("Retry-After"))
+			resp.Body.Close()
+			return &RetryAfterError{Until: until}
+		}
 		resp.Body.Close()
 		if resp.StatusCode == http.StatusOK {
 			return nil
 		}
 		lastErr = fmt.Errorf("ingest returned %s", resp.Status)
-		if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusBadRequest || resp.StatusCode == http.StatusTooManyRequests {
+		if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusBadRequest {
 			return lastErr // retrying won't help
 		}
 	}
 	return lastErr
+}
+
+func retryAfter(value string) time.Time {
+	if seconds, err := strconv.Atoi(strings.TrimSpace(value)); err == nil && seconds > 0 {
+		return time.Now().Add(time.Duration(seconds) * time.Second)
+	}
+	if when, err := http.ParseTime(value); err == nil && when.After(time.Now()) {
+		return when
+	}
+	return time.Now().Add(time.Minute)
+}
+
+// RetryUntil unwraps a server-provided Retry-After pause from a partial batch.
+func RetryUntil(err error) (time.Time, bool) {
+	var retry *RetryAfterError
+	if errors.As(err, &retry) {
+		return retry.Until, true
+	}
+	return time.Time{}, false
 }

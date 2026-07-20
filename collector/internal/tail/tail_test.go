@@ -44,3 +44,27 @@ func TestCompleteLinesOnly(t *testing.T) {
 		t.Fatalf("expected no lines, got %q", lines)
 	}
 }
+
+func TestPollBoundsLargeHistoryRead(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "large.jsonl")
+	line := []byte(`{"message":"history"}` + "\n")
+	data := make([]byte, 0, maxReadBytes+len(line))
+	for len(data) <= maxReadBytes {
+		data = append(data, line...)
+	}
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	tailer := New(path)
+	first, err := tailer.Poll()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(first) == 0 || tailer.Offset() > maxReadBytes {
+		t.Fatalf("first poll lines=%d offset=%d", len(first), tailer.Offset())
+	}
+	second, err := tailer.Poll()
+	if err != nil || len(second) == 0 || tailer.Offset() != int64(len(data)) {
+		t.Fatalf("second poll lines=%d offset=%d err=%v", len(second), tailer.Offset(), err)
+	}
+}

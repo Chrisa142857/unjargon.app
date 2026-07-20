@@ -51,13 +51,14 @@ type tracked struct {
 }
 
 type Daemon struct {
-	cfg      Config
-	queue    *buffer.Queue
-	mu       sync.Mutex
-	tailers  map[string]*tracked
-	offsets  *offsetStore
-	started  time.Time
-	workBusy atomic.Bool
+	cfg        Config
+	queue      *buffer.Queue
+	mu         sync.Mutex
+	tailers    map[string]*tracked
+	offsets    *offsetStore
+	started    time.Time
+	retryUntil time.Time
+	workBusy   atomic.Bool
 }
 
 func New(cfg Config) (*Daemon, error) {
@@ -129,8 +130,11 @@ func (d *Daemon) Run() error {
 			d.scan()
 			d.poll()
 		case <-flushTick.C:
-			if n, err := d.queue.Flush(d.cfg.Shipper.SendRaw); n > 0 || err != nil {
-				log.Printf("offline queue: flushed %d, %d left (err=%v)", n, d.queue.Len(), err)
+			if !time.Now().Before(d.retryUntil) {
+				if n, err := d.queue.Flush(d.cfg.Shipper.SendRaw); n > 0 || err != nil {
+					d.deferRetry(err)
+					log.Printf("offline queue: flushed %d, %d left (err=%v)", n, d.queue.Len(), err)
+				}
 			}
 		case <-workTick.C:
 			go d.reportStatus()
@@ -322,6 +326,9 @@ func (d *Daemon) track(path string, fromHook bool) {
 // file is one session). Failed sends go to the offline queue — offsets still
 // advance because the batch is safely on disk.
 func (d *Daemon) poll() {
+	if time.Now().Before(d.retryUntil) {
+		return // the server told us to preserve this history until its reset
+	}
 	d.mu.Lock()
 	paths := make([]string, 0, len(d.tailers))
 	for p := range d.tailers {
@@ -357,8 +364,14 @@ func (d *Daemon) poll() {
 		if len(msgs) > 0 {
 			batch := d.cfg.Shipper.FromMessages(tr.parser.Tool(), msgs)
 			if err := d.cfg.Shipper.SendBatch(batch); err != nil {
+				d.deferRetry(err)
 				log.Printf("ship failed, buffering %d message(s): %v", len(batch.Messages), err)
-				if qerr := d.queue.Push(batch); qerr != nil {
+				queued := any(batch)
+				var partial interface{ Remaining() []byte }
+				if errors.As(err, &partial) {
+					queued = json.RawMessage(partial.Remaining())
+				}
+				if qerr := d.queue.Push(queued); qerr != nil {
 					log.Printf("buffer failed, %d message(s) LOST: %v", len(batch.Messages), qerr)
 				}
 			} else {
@@ -374,6 +387,13 @@ func (d *Daemon) poll() {
 		if err := d.offsets.save(); err != nil {
 			log.Printf("offsets save: %v", err)
 		}
+	}
+}
+
+func (d *Daemon) deferRetry(err error) {
+	if until, ok := ship.RetryUntil(err); ok && until.After(d.retryUntil) {
+		d.retryUntil = until
+		log.Printf("history import paused until %s", until.UTC().Format(time.RFC3339))
 	}
 }
 

@@ -52,9 +52,16 @@ digests.
 
 On D1 Free, collector requests are split to 20 messages and the server uses
 conservative daily import/detection ceilings. Backlog is paused—not skipped—at
-the ceiling and resumes after 00:00 UTC. The limits default to 4,000 incoming
-messages and 750 detections/day and can be adjusted with
+the ceiling and resumes after 00:00 UTC via the collector heartbeat. The
+collector honors `Retry-After`, keeps only the unacknowledged tail of a partial
+upload, and reads giant transcript files in 1 MiB pieces. The limits default
+to 4,000 incoming messages and 750 shared detections/day and can be adjusted with
 `D1_DAILY_INGEST_MESSAGES` / `D1_DAILY_DETECTION_MESSAGES`.
+
+For a large history, detection remains zero-AI and chronological. It works in
+50-message batches, reuses glossary lookups within each batch, keeps only the
+latest 200 raw messages in the browser, and reports the D1 daily-window pause
+instead of a false one-hour completion estimate.
 
 `translated_at`, subtitle fields, digest table, and keyword rows remain in the
 fresh D1 baseline for compatibility with the current app data shape. New
@@ -122,9 +129,7 @@ cd collector && gofmt -w cmd/unjargond/main.go internal/aicli/aicli.go internal/
 
 ## Next practical step
 
-The D1 schema and authenticated Worker gateway are live. Publish this branch,
-then verify Google sign-in → pairing → one collector ingest against Render.
-Finally publish a collector release and reinstall on a test macOS and Linux
-machine with `--reimport`. Pair it, import existing Claude Code and Codex
-history, and use `/live` to confirm progress advances and an explicit
-explanation works only from a collector that reports ready.
+Publish this large-history fix, trigger a collector release, and reinstall it
+on a test macOS and Linux machine. Pair it, import existing Claude Code and
+Codex history, and use `/live` to confirm the shared daily-window progress and
+automatic next-day resume.

@@ -52,6 +52,7 @@ type ImportProgress = {
 
 const INSTALL_COMMAND =
   "curl -fsSL https://raw.githubusercontent.com/Chrisa142857/unjargon.app/main/install.sh | sh -s -- --server https://unjargon.onrender.com";
+const MAX_VISIBLE_MESSAGES = 200;
 
 // Every domain gets a stable color identity — chips are the product surface,
 // so they carry the visual weight. Class strings are complete literals so
@@ -241,6 +242,10 @@ function ImportProgressCard({ progress }: { progress: ImportProgress }) {
     pending > 0 && progress.ratePerHour > 0
       ? etaLabel(pending / progress.ratePerHour)
       : null;
+  const todayRemaining = Math.max(0, progress.dailyDetectionLimit - progress.dailyDetectionUsed);
+  const resetCount = progress.dailyDetectionLimit > 0
+    ? Math.ceil(Math.max(0, pending - todayRemaining) / progress.dailyDetectionLimit)
+    : 0;
   const range = progress.firstMessageAt && progress.lastMessageAt
     ? `${dayLabelOf(progress.firstMessageAt)} → ${dayLabelOf(progress.lastMessageAt)}`
     : null;
@@ -248,7 +253,11 @@ function ImportProgressCard({ progress }: { progress: ImportProgress }) {
   if (pending === 0) {
     status = "All caught up — receiving new updates now.";
   } else if (progress.dailyDetectionLimit > 0 && progress.dailyDetectionUsed >= progress.dailyDetectionLimit) {
-    status = "History detection resumes after 00:00 UTC to stay within Cloudflare D1’s free daily limit.";
+    status = "History detection resumes after 00:00 UTC to stay within the shared Cloudflare D1 free daily limit.";
+  } else if (receiving) {
+    status = "Receiving history now — a finish estimate appears when the scan settles.";
+  } else if (resetCount > 0) {
+    status = `${todayRemaining.toLocaleString()} checks fit today; at least ${resetCount} UTC ${resetCount === 1 ? "reset" : "resets"} remain under the shared free allowance.`;
   } else if (eta) {
     status = `${eta} until jargon detection finishes, at the current pace.`;
   } else {
@@ -318,7 +327,7 @@ export default function LiveStream() {
           return [
             ...data.messages,
             ...live.filter((m: LiveMessage) => !seen.has(m.id)),
-          ];
+          ].slice(-MAX_VISIBLE_MESSAGES);
         });
         for (const term of data.terms) knownTermIds.current.add(term.id);
         setTerms((live) => {
@@ -388,11 +397,12 @@ export default function LiveStream() {
           annotations: [],
         };
         setMessages((prev) =>
-          prev.some((p) => p.id === m.id) ? prev : [...prev, m],
+          prev.some((p) => p.id === m.id) ? prev : [...prev, m].slice(-MAX_VISIBLE_MESSAGES),
         );
         setProgress((p) => ({
           ...p,
           messages: p.messages + 1,
+          sessions: p.sessions + (event.message.sessionCreated ? 1 : 0),
           lastMessageAt: m.ts,
           lastImportedAt: new Date().toISOString(),
         }));
@@ -417,7 +427,12 @@ export default function LiveStream() {
           (liveDetection.current.count * 3_600_000) /
             Math.max(5_000, tick - liveDetection.current.startedAt),
         );
-        setProgress((p) => ({ ...p, detected: p.detected + 1, ratePerHour }));
+        setProgress((p) => ({
+          ...p,
+          detected: p.detected + 1,
+          dailyDetectionUsed: event.dailyDetectionUsed,
+          ratePerHour,
+        }));
         const now = new Date().toISOString();
         const freshTerms = event.newTerms.filter((t) => !knownTermIds.current.has(t.id));
         if (freshTerms.length > 0) {

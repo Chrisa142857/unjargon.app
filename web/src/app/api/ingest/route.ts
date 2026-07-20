@@ -1,4 +1,4 @@
-import { count, eq, gte } from "drizzle-orm";
+import { and, count, eq, gte } from "drizzle-orm";
 import { createHash } from "node:crypto";
 import { db, tables } from "@/db";
 import { deviceForRequest } from "@/lib/auth";
@@ -82,7 +82,7 @@ export async function POST(req: Request) {
   if (body.device !== device.name) return bad(403, "device name does not match token");
   await db.update(tables.devices).set({ lastSeenAt: new Date() }).where(eq(tables.devices.id, device.id));
 
-  const [session] = await db
+  let [session] = await db
     .insert(tables.sessions)
     .values({
       deviceId: device.id,
@@ -90,12 +90,19 @@ export async function POST(req: Request) {
       sessionKey: body.session_id,
       cwd: body.cwd ?? null,
     })
-    .onConflictDoUpdate({
-      // no-op update so .returning() yields the existing row
-      target: [tables.sessions.deviceId, tables.sessions.sessionKey],
-      set: { sessionKey: body.session_id },
-    })
+    .onConflictDoNothing()
     .returning();
+  const sessionCreated = !!session;
+  if (!session) {
+    [session] = await db
+      .select()
+      .from(tables.sessions)
+      .where(and(
+        eq(tables.sessions.deviceId, device.id),
+        eq(tables.sessions.sessionKey, body.session_id),
+      ));
+  }
+  if (!session) return bad(500, "could not create session");
 
   const normalized = msgs.map((m) => {
     const ts = isNaN(Date.parse(m.ts)) ? new Date() : new Date(m.ts);
@@ -116,13 +123,14 @@ export async function POST(req: Request) {
     stored.push(...rows);
   }
 
-  for (const row of stored) {
+  for (const [index, row] of stored.entries()) {
     publish({
       userId,
       type: "message",
       message: {
         id: row.id,
         sessionId: row.sessionId,
+        sessionCreated: sessionCreated && index === 0,
         device: device.name,
         tool: session.tool,
         cwd: session.cwd,
@@ -134,7 +142,7 @@ export async function POST(req: Request) {
 
   // Deliberately ignore any `translation` field sent by an older collector.
   // Detection happens server-side with no AI call and also backfills history.
-  scheduleDetection(userId);
+  if (stored.length > 0) scheduleDetection(userId, true);
 
   return Response.json({ stored: stored.length });
 }

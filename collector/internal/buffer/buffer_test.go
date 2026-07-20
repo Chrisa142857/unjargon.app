@@ -2,8 +2,14 @@ package buffer
 
 import (
 	"errors"
+	"os"
+	"path/filepath"
 	"testing"
 )
+
+type partialError struct{ error }
+
+func (partialError) Remaining() []byte { return []byte(`{"v":"remaining"}`) }
 
 func TestPushFlushOrder(t *testing.T) {
 	q, err := New(t.TempDir() + "/queue")
@@ -44,5 +50,30 @@ func TestPushFlushOrder(t *testing.T) {
 		if got[i] != want {
 			t.Errorf("order[%d]=%s want %s", i, got[i], want)
 		}
+	}
+}
+
+func TestFlushReplacesPartiallyAcknowledgedBatch(t *testing.T) {
+	q, err := New(t.TempDir() + "/queue")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := q.Push(map[string]string{"v": "all"}); err != nil {
+		t.Fatal(err)
+	}
+	_, err = q.Flush(func([]byte) error { return partialError{errors.New("daily cap")} })
+	if err == nil {
+		t.Fatal("want partial failure")
+	}
+	entries, err := os.ReadDir(q.Dir)
+	if err != nil || len(entries) != 1 {
+		t.Fatalf("entries = %v, err = %v", entries, err)
+	}
+	data, err := os.ReadFile(filepath.Join(q.Dir, entries[0].Name()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := string(data), `{"v":"remaining"}`; got != want {
+		t.Fatalf("queued = %s, want %s", got, want)
 	}
 }

@@ -39,7 +39,17 @@ export async function GET(req: Request) {
     .select({ detectedToday: count(tables.messages.id) })
     .from(tables.messages)
     .where(gte(tables.messages.detectedAt, utcDayStart()));
-
+  const progressPayload = {
+    messages: Number(progress.messages),
+    detected: Number(progress.detected),
+    ratePerHour: Number(progress.detectedLastHour),
+    dailyDetectionLimit: detectionDailyLimit,
+    dailyDetectionUsed: Number(detectedToday),
+    sessions: Number(progress.sessions),
+    firstMessageAt: progress.firstMessageAt?.toISOString() ?? null,
+    lastMessageAt: progress.lastMessageAt?.toISOString() ?? null,
+    lastImportedAt: progress.lastImportedAt?.toISOString() ?? null,
+  };
   const rows = await db
     .select({
       id: tables.messages.id,
@@ -123,17 +133,7 @@ export async function GET(req: Request) {
 
   return Response.json({
     calibration: user.calibration,
-    progress: {
-      messages: Number(progress.messages),
-      detected: Number(progress.detected),
-      ratePerHour: Number(progress.detectedLastHour),
-      dailyDetectionLimit: detectionDailyLimit,
-      dailyDetectionUsed: Number(detectedToday),
-      sessions: Number(progress.sessions),
-      firstMessageAt: progress.firstMessageAt?.toISOString() ?? null,
-      lastMessageAt: progress.lastMessageAt?.toISOString() ?? null,
-      lastImportedAt: progress.lastImportedAt?.toISOString() ?? null,
-    },
+    progress: progressPayload,
     terms: termRows.map((t) => ({
       id: t.id,
       term: t.term,

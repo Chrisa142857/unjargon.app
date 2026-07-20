@@ -103,12 +103,14 @@ stable per-message dedupe key.
 ## D1 free-plan safeguards
 
 - Incoming collector requests are split into 20 messages, under D1's 100
-  bound-parameter limit.
+  bound-parameter limit; a `429 Retry-After` pauses a large local backfill and
+  retains only the unacknowledged tail for the next daily window.
 - The server accepts up to 4,000 new messages/day by default and detects
-  jargon in up to 750 messages/day. Both limits are configurable with
+  jargon in up to 750 shared messages/day. Both limits are configurable with
   `D1_DAILY_INGEST_MESSAGES` and `D1_DAILY_DETECTION_MESSAGES`.
 - Work resumes after 00:00 UTC rather than dropping old history. `/live`
-  shows the detection pause when the daily detector allowance is spent.
+  shows the detection pause and calendar windows when the daily detector
+  allowance is spent.
 
 These conservative defaults protect D1 Free's daily write allowance while a
 large existing transcript archive is imported. R2 is intentionally not on the
