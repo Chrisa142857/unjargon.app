@@ -1,9 +1,8 @@
 import { EventEmitter } from "node:events";
 
 // In-process pub/sub connecting /api/ingest (publisher) to /api/stream (SSE
-// subscribers). Works because the app runs as a single Node process (dev or
-// a single Railway-style service). If we ever deploy to serverless, swap the
-// internals for Postgres LISTEN/NOTIFY — the interface stays the same.
+// subscribers). Works because the app runs as a single Node process. If this
+// service is ever scaled horizontally, swap the internals for durable pub/sub.
 
 export type StreamMessage = {
   id: number;

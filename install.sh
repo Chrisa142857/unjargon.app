@@ -9,12 +9,14 @@
 #   --server URL    unjargon web app (default https://unjargon.onrender.com)
 #   --binary PATH   use a locally built unjargond instead of downloading
 #   --no-service    install binary + config only, don't register a service
+#   --reimport      intentionally re-send existing transcript history once
 set -eu
 
 PAIR_CODE=""
 SERVER="https://unjargon.onrender.com"
 BINARY=""
 SERVICE=1
+REIMPORT=0
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -22,6 +24,7 @@ while [ $# -gt 0 ]; do
     --server)  SERVER="$2"; shift 2 ;;
     --binary)  BINARY="$2"; shift 2 ;;
     --no-service) SERVICE=0; shift ;;
+    --reimport) REIMPORT=1; shift ;;
     *) echo "unknown flag: $1" >&2; exit 2 ;;
   esac
 done
@@ -58,6 +61,12 @@ BIN="$BIN_DIR/unjargond"
 CONF_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/unjargond"
 STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/unjargond"
 mkdir -p "$BIN_DIR" "$CONF_DIR" "$STATE_DIR"
+
+if [ "$REIMPORT" -eq 1 ]; then
+  # Explicit only: offsets prevent duplicate history on normal reinstalls.
+  rm -f "$STATE_DIR/offsets.json" "$STATE_DIR/backfill-v1.done"
+  echo "cleared local transcript offsets; existing history will be re-imported once"
+fi
 
 # --- binary ------------------------------------------------------------------
 if [ -n "$BINARY" ]; then

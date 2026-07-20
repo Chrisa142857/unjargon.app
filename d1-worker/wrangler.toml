@@ -1,0 +1,11 @@
+name = "unjargon-d1"
+main = "src/index.js"
+compatibility_date = "2026-07-20"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "unjargon"
+database_id = "09def87b-2548-45cc-aac6-38b0ff2fd5fb"
+
+[secrets]
+required = ["D1_GATEWAY_TOKEN"]

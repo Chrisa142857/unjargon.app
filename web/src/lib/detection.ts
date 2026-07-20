@@ -1,10 +1,20 @@
-import { and, asc, desc, eq, isNull } from "drizzle-orm";
+import { and, asc, count, desc, eq, gte, isNull } from "drizzle-orm";
 import { db, tables } from "@/db";
 import { publish, type DetectionEvent } from "@/lib/bus";
 import { corpusFor, detectJargon } from "@/lib/detect";
 
-const BATCH_SIZE = 50;
+const BATCH_SIZE = 10;
 const L1 = "Detected without AI. Select this term if you want an explanation.";
+export const detectionDailyLimit = (() => {
+  // Conservative Free-plan default. Increase only after checking D1 Row Metrics.
+  const value = Number(process.env.D1_DAILY_DETECTION_MESSAGES ?? 750);
+  return Number.isInteger(value) && value > 0 ? value : 750;
+})();
+
+export function utcDayStart() {
+  const now = new Date();
+  return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+}
 
 const globalForDetection = globalThis as unknown as {
   __unjargonDetectionUsers?: Set<number>;
@@ -35,6 +45,13 @@ export function scheduleDetection(userId: number) {
 }
 
 async function detectBatch(userId: number) {
+  const [{ today }] = await db
+    .select({ today: count(tables.messages.id) })
+    .from(tables.messages)
+    .where(gte(tables.messages.detectedAt, utcDayStart()));
+  const remaining = Math.max(0, detectionDailyLimit - Number(today));
+  if (remaining === 0) return false;
+  const batchSize = Math.min(BATCH_SIZE, remaining);
   const rows = await db
     .select({ message: tables.messages })
     .from(tables.messages)
@@ -42,7 +59,7 @@ async function detectBatch(userId: number) {
     .innerJoin(tables.devices, eq(tables.sessions.deviceId, tables.devices.id))
     .where(and(eq(tables.devices.userId, userId), isNull(tables.messages.detectedAt)))
     .orderBy(asc(tables.messages.ts), asc(tables.messages.id))
-    .limit(BATCH_SIZE);
+    .limit(batchSize);
   if (rows.length === 0) return false;
 
   // ponytail: a recent per-user corpus is enough for weirdness scoring. Add
@@ -57,7 +74,7 @@ async function detectBatch(userId: number) {
     .limit(1000);
   const corpus = corpusFor(recent.map((row) => row.text));
   for (const { message } of rows) await storeDetection(message, userId, corpus);
-  return rows.length === BATCH_SIZE;
+  return rows.length === batchSize && remaining > rows.length;
 }
 
 async function storeDetection(

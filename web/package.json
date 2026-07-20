@@ -8,6 +8,7 @@
     "start": "next start",
     "lint": "eslint",
     "check:detector": "node --experimental-strip-types scripts/check-detector.ts",
+    "check:d1": "node --experimental-strip-types scripts/check-d1.ts",
     "check:local-expander": "node --experimental-strip-types scripts/check-local-expander.ts"
   },
   "dependencies": {

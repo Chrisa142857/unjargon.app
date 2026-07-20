@@ -1,116 +1,150 @@
-# Deploying unjargon for free
+# Deploying unjargon with free Cloudflare D1
 
-Two free services, split at the API boundary:
+The API stays on Render, where its long-lived Node process supplies Google
+OAuth and SSE. Durable data is free Cloudflare D1:
 
-- **Backend** (API + SSE + Postgres + the full UI too): a Docker container
-  built from this repo's `Dockerfile` — **Render** free tier by default
-  (Hugging Face's Docker SDK is now paid for new Spaces; a paid/grandfathered
-  Space works identically).
-- **Frontend** (static UI): **GitHub Pages**, built by
-  `.github/workflows/pages.yml`, talking to the backend cross-origin (CORS is
-  already configured).
-
-The backend alone is a complete deployment — the Pages frontend is a bonus
-mirror on your own github.io domain. Collectors point at the backend either way.
-
-## 1. Backend — Render (free Docker hosting)
-
-> Hugging Face now marks the Docker SDK as **paid** for new Spaces, so the
-> free path is Render; the HF instructions below still work for paid or
-> grandfathered Spaces.
-
-[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/Chrisa142857/unjargon.app)
-
-1. In Render, create a Postgres database named `unjargon-db` in **Oregon** and
-   choose its plan. The free 1 GB option is fine for a short demo; it expires
-   after 30 days and has no backups.
-2. Click the button (sign in to https://render.com with GitHub) and approve
-   the blueprint. It provisions the `unjargon` web service and supplies its
-   `DATABASE_URL` from that database over Render's private network. There is
-   no shared `INGEST_TOKEN`: each collector exchanges a short-lived browser
-   pairing code for its own device credential.
-3. When the first deploy finishes, copy the service URL
-   (`https://unjargon-<hash>.onrender.com`).
-4. Point the frontend at it: paste the URL into the connect field on the
-   Pages site (instant, per-browser), and/or add it as the repo Actions
-   variable `UNJARGON_API_BASE` so the next Pages build bakes it in.
-
-Render auto-redeploys the service on every push to `main`. Without
-`DATABASE_URL`, it emits a clear startup warning and uses bundled Postgres;
-that storage is erased whenever the service sleeps, restarts, or redeploys.
-
-### Required production database choice
-
-Before collecting real user data, choose a durable Postgres plan. Render's
-free 1 GB Postgres survives service restarts but expires after 30 days and has
-no backups, so it is only suitable for a demo. This choice is deliberately not
-made by `render.yaml`: it would otherwise silently create either an expiring
-free database or a billable one.
-
-### Existing Render service
-
-The already-running service will not gain a database merely from a normal Git
-push. In Render, create a Postgres database named `unjargon-db` in Oregon and
-choose its plan, then sync the updated Blueprint. Its `DATABASE_URL` reference
-uses the database's private connection string. A Blueprint sync fails safely
-until that named database exists. For an external provider instead, set its
-connection string as the `unjargon` service's `DATABASE_URL` in the Render
-dashboard and do not sync the Render-database reference unchanged.
-
-## 1b. Backend — Hugging Face Space (Docker SDK now paid; no local git needed)
-
-The `Sync backend to Hugging Face Space` workflow pushes `main` to your
-Space. One-time setup, all in browser UIs:
-
-1. Create the Space: https://huggingface.co/new-space → SDK **Docker**
-   (blank template), name it e.g. `unjargon`, CPU basic (free).
-2. Create a Hugging Face **write** token: https://huggingface.co/settings/tokens
-3. In the GitHub repo → Settings → Secrets and variables → Actions, add:
-   - secret `HF_TOKEN` — the token from step 2
-   - variable `HF_SPACE` — `<hf-username>/<space-name>` (e.g. `wei/unjargon`)
-4. Run the sync workflow once (Actions → "Sync backend to Hugging Face
-   Space" → Run workflow) — every later push to `main` re-syncs.
-5. Optional Space secret (Space → Settings): `ANTHROPIC_API_KEY` — used only
-   after a user presses an explanation button. Detection and history import
-   are zero-AI. Or set `UNJARGON_FAKE_TRANSLATOR=1` for the canned on-demand
-   explanation demo.
-
-The app serves at `https://<hf-username>-<space-name>.hf.space`.
-
-Point a collector at it:
-
-```sh
-./unjargond replay fixtures/session.jsonl \
-  -server https://<hf-user>-unjargon.hf.space
+```text
+collector/browser → Render (Next.js + SSE) → private Worker gateway → D1
 ```
 
-**Database requirement for durable data:** set a durable `DATABASE_URL` Space
-secret before starting the container. Without it, the entrypoint logs an
-ephemeral-storage warning; data resets when the Space rebuilds or restarts.
-Free Spaces still sleep after ~48h of inactivity (first request wakes them,
-cold start takes a minute).
+The gateway uses a D1 binding. It is not Cloudflare's administrative D1 REST
+API, and Render never receives a Cloudflare account token.
 
-## 2. Frontend — GitHub Pages
+## 0. Authorize Cloudflare once
 
-One-time repo setup on GitHub:
-
-1. **Settings → Pages** → Source: **GitHub Actions**.
-2. Push to `main` (or run the "Deploy frontend to GitHub Pages" workflow).
-
-The UI appears at `https://<gh-user>.github.io/<repo>/live/`. The backend
-URL is baked in automatically from the `HF_SPACE` variable (override with a
-`UNJARGON_API_BASE` variable); with neither set, the site asks for a
-backend URL at runtime and remembers it per browser.
-
-## Local sanity checks (no accounts needed)
+Either run `npx wrangler login`, or use a short-lived, account-scoped custom
+API token. The token needs only **Account → D1 → Edit** and **Account →
+Workers Scripts → Edit** for the target account. Do not use a Global API Key
+or give it Billing, DNS, R2, Pages, or KV permissions. With the account ID,
+Wrangler does not need broad account-discovery permissions:
 
 ```sh
-# the exact container the Space runs:
-docker build -t unjargon-space .
-docker run -p 7860:7860 -e UNJARGON_FAKE_TRANSLATOR=1 unjargon-space
-# → http://localhost:7860/live
-
-# the exact static bundle Pages serves:
-cd web && NEXT_PUBLIC_API_BASE=http://localhost:7860 \
-  NEXT_PUBLIC_BASE_PATH=/unjargon.app sh scripts/build-pages.sh
+export CLOUDFLARE_ACCOUNT_ID=<Cloudflare account ID>
+export CLOUDFLARE_API_TOKEN=<short-lived custom token>
 ```
+
+Revoke the provisioning token after deployment if it will not be used again.
+
+## 1. Create D1 and the gateway
+
+Keep the Cloudflare account on **Workers Free**. Before creating anything,
+check that no older test resources would be reused accidentally:
+
+```sh
+cd d1-worker
+npx wrangler d1 list
+npx wrangler deployments list
+npx wrangler d1 create unjargon --update-config=false
+```
+
+Copy the returned database UUID into `d1-worker/wrangler.toml` as
+`database_id`. Apply the fresh SQLite baseline before exposing the app:
+
+```sh
+npx wrangler d1 execute unjargon --remote --file=../web/d1/0000_init.sql
+openssl rand -base64 32
+npx wrangler secret put D1_GATEWAY_TOKEN
+npx wrangler deploy
+```
+
+Enter the random value produced by `openssl` when Wrangler prompts. Save the
+Worker URL with `/query` appended, for example:
+
+```text
+https://unjargon-d1.<your-subdomain>.workers.dev/query
+```
+
+`web/d1/0000_init.sql` is a fresh D1 baseline. Do **not** run the old
+`web/drizzle/` Postgres migrations on D1.
+
+## 2. Configure Render
+
+In the `unjargon` Render service, add these environment variables:
+
+```text
+D1_GATEWAY_URL=<the Worker /query URL>
+D1_GATEWAY_TOKEN=<the exact random value entered above>
+GOOGLE_CLIENT_ID=<existing value>
+GOOGLE_CLIENT_SECRET=<existing value>
+AUTH_SECRET=<existing value>
+APP_URL=https://unjargon.onrender.com
+```
+
+Server AI requires both `UNJARGON_ALLOW_SERVER_AI=1` and
+`ANTHROPIC_API_KEY`. Leave the opt-in flag unset for a zero-cost deployment;
+there is no `DATABASE_URL` and no shared `INGEST_TOKEN`.
+
+Deploy the Worker, set the Render variables, then deploy Render. The
+container fails fast if either D1 gateway setting is missing, avoiding an
+accidental ephemeral datastore.
+
+Google's redirect URI stays:
+
+```text
+https://unjargon.onrender.com/api/auth/google/callback
+```
+
+## 3. Preserve existing history deliberately
+
+A fresh D1 has no prior messages. After the Render deployment is healthy,
+sign in, create a new pairing code, and reinstall each collector with the
+explicit replay flag:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/Chrisa142857/unjargon.app/main/install.sh \
+  | sh -s -- --server https://unjargon.onrender.com --reimport
+```
+
+`--reimport` clears only that collector's saved transcript offsets and its
+one-time backfill marker. Normal reinstalls leave those offsets alone, so they
+do not duplicate history. Retrying chunks is safe because the server records a
+stable per-message dedupe key.
+
+## D1 free-plan safeguards
+
+- Incoming collector requests are split into 20 messages, under D1's 100
+  bound-parameter limit.
+- The server accepts up to 4,000 new messages/day by default and detects
+  jargon in up to 750 messages/day. Both limits are configurable with
+  `D1_DAILY_INGEST_MESSAGES` and `D1_DAILY_DETECTION_MESSAGES`.
+- Work resumes after 00:00 UTC rather than dropping old history. `/live`
+  shows the detection pause when the daily detector allowance is spent.
+
+These conservative defaults protect D1 Free's daily write allowance while a
+large existing transcript archive is imported. R2 is intentionally not on the
+live database path; add it later only for optional exports or archives.
+
+The Worker is free at its `workers.dev` URL. Keep Render on its Free plan and
+do not add a payment method if a strict $0 ceiling matters: its free egress
+allowance can otherwise create an overage. Keep the GitHub variable
+`UNJARGON_API_BASE=https://unjargon.onrender.com` and leave `HF_SPACE` unset
+so no second backend is deployed. D1 Free stops accepting queries at its
+quota/storage ceiling rather than auto-upgrading; it does not provide
+unlimited transcript retention.
+
+## Frontend
+
+GitHub Pages remains a static mirror. Set the repository Actions variable
+`UNJARGON_API_BASE=https://unjargon.onrender.com` and run the Pages workflow.
+The Page redirects account-bound routes to the Render API origin, preserving
+the secure auth cookie.
+
+## Local checks
+
+```sh
+cd web
+npm run check:d1
+npm run check:detector
+npm run lint
+npx tsc --noEmit
+npm run build
+
+cd ../collector
+go test ./...
+```
+
+`check:d1` applies the real D1 SQLite baseline to an in-memory SQLite engine
+and exercises timestamps, unique upserts, `RETURNING`, foreign keys, and the
+proxy result shape. Before cutover, also run the same baseline against the
+remote D1 database with Wrangler and complete a Google sign-in → pair →
+collector import flow in the deployed app.

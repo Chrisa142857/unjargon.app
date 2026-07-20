@@ -1,7 +1,7 @@
-import { and, count, countDistinct, desc, eq, inArray, isNull, max, min, ne, sql } from "drizzle-orm";
+import { and, count, countDistinct, desc, eq, gte, inArray, isNull, max, min, ne, sql } from "drizzle-orm";
 import { db, tables } from "@/db";
 import { requireUser } from "@/lib/auth";
-import { scheduleDetection } from "@/lib/detection";
+import { detectionDailyLimit, scheduleDetection, utcDayStart } from "@/lib/detection";
 
 export const dynamic = "force-dynamic";
 
@@ -18,23 +18,27 @@ export async function GET(req: Request) {
   scheduleDetection(user.id);
 
   // Truthful import status: completed means jargon detection finished.
-  const hourAgo = new Date(Date.now() - 3600_000).toISOString();
+  const hourAgo = Date.now() - 3600_000;
   const [progress] = await db
     .select({
       messages: count(tables.messages.id),
       detected: count(tables.messages.detectedAt),
       detectedLastHour: count(
-        sql`case when ${tables.messages.detectedAt} > ${hourAgo}::timestamptz then 1 end`,
+        sql`case when ${tables.messages.detectedAt} > ${hourAgo} then 1 end`,
       ),
       sessions: countDistinct(tables.sessions.id),
-      firstMessageAt: min(tables.messages.ts),
-      lastMessageAt: max(tables.messages.ts),
-      lastImportedAt: max(tables.messages.createdAt),
+      firstMessageAt: min(tables.messages.ts).mapWith(tables.messages.ts),
+      lastMessageAt: max(tables.messages.ts).mapWith(tables.messages.ts),
+      lastImportedAt: max(tables.messages.createdAt).mapWith(tables.messages.createdAt),
     })
     .from(tables.messages)
     .innerJoin(tables.sessions, eq(tables.messages.sessionId, tables.sessions.id))
     .innerJoin(tables.devices, eq(tables.sessions.deviceId, tables.devices.id))
     .where(eq(tables.devices.userId, user.id));
+  const [{ detectedToday }] = await db
+    .select({ detectedToday: count(tables.messages.id) })
+    .from(tables.messages)
+    .where(gte(tables.messages.detectedAt, utcDayStart()));
 
   const rows = await db
     .select({
@@ -52,7 +56,7 @@ export async function GET(req: Request) {
     .innerJoin(tables.devices, eq(tables.sessions.deviceId, tables.devices.id))
     .where(eq(tables.devices.userId, user.id))
     .orderBy(desc(tables.messages.id))
-    .limit(100);
+    .limit(99);
   const ids = rows.map((r) => r.id);
   const annotationRows =
     ids.length > 0
@@ -123,6 +127,8 @@ export async function GET(req: Request) {
       messages: Number(progress.messages),
       detected: Number(progress.detected),
       ratePerHour: Number(progress.detectedLastHour),
+      dailyDetectionLimit: detectionDailyLimit,
+      dailyDetectionUsed: Number(detectedToday),
       sessions: Number(progress.sessions),
       firstMessageAt: progress.firstMessageAt?.toISOString() ?? null,
       lastMessageAt: progress.lastMessageAt?.toISOString() ?? null,

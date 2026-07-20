@@ -2,6 +2,8 @@
 .env
 .env.*
 !.env.example
+d1-worker/.dev.vars
+d1-worker/.wrangler/
 
 # collector build artifacts
 collector/unjargond

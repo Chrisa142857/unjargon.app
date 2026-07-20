@@ -32,9 +32,11 @@ The dataset is bundled in `web/data/`; its source and license are recorded in
 Build Week heuristic, not a claim of perfect context-aware classification.
 
 When a user taps **“explain what this means · 1 AI call”** or **“explain in my
-sessions · 1 AI call”**, unjargon uses the server's `ANTHROPIC_API_KEY` if one
-is configured, otherwise queues that single request for the paired collector's
-local AI CLI. No card opening, transcript import, or detector pass calls AI.
+sessions · 1 AI call”**, unjargon uses server AI only when both
+`UNJARGON_ALLOW_SERVER_AI=1` and `ANTHROPIC_API_KEY` are configured; otherwise
+it queues that single request for the paired collector's local AI CLI. Leave
+the opt-in flag unset for a zero-cost deployment. No card opening, transcript
+import, or detector pass calls AI.
 
 ## Install a collector
 
@@ -54,14 +56,14 @@ cross-tool fallback.
 ## Architecture
 
 ```text
-Claude Code / Codex → unjargond → HTTPS → Render (Next.js + Postgres)
-                                             ↓ SSE
-                                           browser term board
+Claude Code / Codex → unjargond → HTTPS → Render (Next.js + SSE)
+                                             ↓ private Worker gateway
+                                         Cloudflare D1 → browser term board
 ```
 
 - `collector/` — static Go `unjargond`: discovers transcript JSONL, redacts
   secrets, preserves byte offsets, buffers failed uploads, and ships raw text.
-- `web/` — Next.js, Drizzle, Postgres, zero-AI detector, term database, SSE,
+- `web/` — Next.js, Drizzle, D1 schema/proxy client, zero-AI detector, term database, SSE,
   Google login, pairing, and opt-in explanation queue.
 - `install.sh` — macOS/Linux installer for the collector service.
 
@@ -70,7 +72,7 @@ Claude Code / Codex → unjargond → HTTPS → Render (Next.js + Postgres)
 ```sh
 cd web
 npm install
-npx drizzle-kit push
+npm run check:d1
 npm run check:detector
 npm run lint
 npm run dev
@@ -80,8 +82,9 @@ go test ./...
 go build -o unjargond ./cmd/unjargond
 ```
 
-`ANTHROPIC_API_KEY` is optional and is used only by explicit explanation
-buttons. `UNJARGON_FAKE_TRANSLATOR=1` provides deterministic, on-demand
-explanation text for demos.
+Server AI needs both `UNJARGON_ALLOW_SERVER_AI=1` and `ANTHROPIC_API_KEY` and
+is used only by explicit explanation buttons. `UNJARGON_FAKE_TRANSLATOR=1`
+provides deterministic, on-demand explanation text for demos.
 
 See [`HANDOFF.md`](HANDOFF.md) for current deployment and implementation notes.
+See [`DEPLOY.md`](DEPLOY.md) to create the free D1 database and Worker gateway.

@@ -5,7 +5,7 @@ import { deviceForRequest } from "@/lib/auth";
 export const dynamic = "force-dynamic";
 
 // Collector-reported optional explanation budget. Detection progress comes
-// from Postgres and never waits for this budget.
+// from D1 and never waits for this budget.
 export async function POST(req: Request) {
   const device = await deviceForRequest(req);
   if (!device) return Response.json({ error: "invalid device token" }, { status: 401 });

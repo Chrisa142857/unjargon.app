@@ -34,6 +34,8 @@ type Batch struct {
 	Messages  []Message `json:"messages"`
 }
 
+const maxMessagesPerRequest = 20
+
 // FromMessages builds a redacted batch for one tool. All messages must share
 // a session (the tailer works per transcript file, so this holds naturally).
 func (s *Shipper) FromMessages(tool string, msgs []parse.AgentMessage) Batch {
@@ -64,17 +66,35 @@ func (s *Shipper) Send(tool string, msgs []parse.AgentMessage) error {
 }
 
 func (s *Shipper) SendBatch(b Batch) error {
-	body, err := json.Marshal(b)
-	if err != nil {
-		return err
+	for start := 0; start < len(b.Messages); start += maxMessagesPerRequest {
+		part := b
+		end := start + maxMessagesPerRequest
+		if end > len(b.Messages) {
+			end = len(b.Messages)
+		}
+		part.Messages = b.Messages[start:end]
+		body, err := json.Marshal(part)
+		if err != nil {
+			return err
+		}
+		if err := s.sendRaw(body); err != nil {
+			return err
+		}
 	}
-	return s.SendRaw(body)
+	return nil
 }
 
-// SendRaw posts an already-marshaled batch (used when flushing the offline
-// queue). Retries transient failures with exponential backoff; auth and
-// malformed-request errors fail immediately.
+// SendRaw posts an already-marshaled offline batch. Reparse it so buffered
+// pre-D1 batches receive the same safe request chunking as live sends.
 func (s *Shipper) SendRaw(body []byte) error {
+	var batch Batch
+	if err := json.Unmarshal(body, &batch); err == nil && len(batch.Messages) > 0 {
+		return s.SendBatch(batch)
+	}
+	return s.sendRaw(body)
+}
+
+func (s *Shipper) sendRaw(body []byte) error {
 	client := s.Client
 	if client == nil {
 		client = &http.Client{Timeout: 15 * time.Second}
@@ -100,7 +120,7 @@ func (s *Shipper) SendRaw(body []byte) error {
 			return nil
 		}
 		lastErr = fmt.Errorf("ingest returned %s", resp.Status)
-		if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusBadRequest {
+		if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusBadRequest || resp.StatusCode == http.StatusTooManyRequests {
 			return lastErr // retrying won't help
 		}
 	}

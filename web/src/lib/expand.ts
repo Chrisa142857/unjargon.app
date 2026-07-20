@@ -226,9 +226,9 @@ export async function completeExpansionWork(
 }
 
 function requireLLM() {
-  if (!process.env.ANTHROPIC_API_KEY) {
+  if (process.env.UNJARGON_ALLOW_SERVER_AI !== "1" || !process.env.ANTHROPIC_API_KEY) {
     throw new Error(
-      "ANTHROPIC_API_KEY not set (set it, or UNJARGON_FAKE_TRANSLATOR=1 for offline dev)",
+      "server AI disabled (set UNJARGON_ALLOW_SERVER_AI=1 and ANTHROPIC_API_KEY, or UNJARGON_FAKE_TRANSLATOR=1 for offline dev)",
     );
   }
 }
@@ -243,7 +243,7 @@ async function callConcept(input: {
     console.warn("[expand] UNJARGON_FAKE_TRANSLATOR=1 — using offline fake, NOT the real model");
     return (
       FAKE_EXPANSIONS[input.term.toLowerCase()]?.level2 ??
-      `${input.l1} (Offline fake L2 — set ANTHROPIC_API_KEY for a real explanation of “${input.term}”.)`
+      `${input.l1} (Offline fake L2 — explicitly enable server AI for a real explanation of “${input.term}”.)`
     );
   }
   requireLLM();

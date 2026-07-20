@@ -42,6 +42,8 @@ type ImportProgress = {
   messages: number;
   detected: number;
   ratePerHour: number; // detections finished in the last hour
+  dailyDetectionLimit: number;
+  dailyDetectionUsed: number;
   sessions: number;
   firstMessageAt: string | null;
   lastMessageAt: string | null;
@@ -245,6 +247,8 @@ function ImportProgressCard({ progress }: { progress: ImportProgress }) {
   let status: string;
   if (pending === 0) {
     status = "All caught up — receiving new updates now.";
+  } else if (progress.dailyDetectionLimit > 0 && progress.dailyDetectionUsed >= progress.dailyDetectionLimit) {
+    status = "History detection resumes after 00:00 UTC to stay within Cloudflare D1’s free daily limit.";
   } else if (eta) {
     status = `${eta} until jargon detection finishes, at the current pace.`;
   } else {
@@ -291,7 +295,7 @@ export default function LiveStream() {
   const [connected, setConnected] = useState(false);
   const [pinned, setPinned] = useState(true);
   const [calibration, setCalibration] = useState<Calibration>("new");
-  const [progress, setProgress] = useState<ImportProgress>({ messages: 0, detected: 0, ratePerHour: 0, sessions: 0, firstMessageAt: null, lastMessageAt: null, lastImportedAt: null });
+  const [progress, setProgress] = useState<ImportProgress>({ messages: 0, detected: 0, ratePerHour: 0, dailyDetectionLimit: 0, dailyDetectionUsed: 0, sessions: 0, firstMessageAt: null, lastMessageAt: null, lastImportedAt: null });
 
   useEffect(() => {
     if (bounceToApiOrigin("/live")) return; // static build → the app runs on the backend
