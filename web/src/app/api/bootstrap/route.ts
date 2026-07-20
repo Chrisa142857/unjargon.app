@@ -57,9 +57,20 @@ export async function GET(req: Request) {
   const annotationRows =
     ids.length > 0
       ? await db
-          .select()
+          .select({
+            id: tables.annotations.id,
+            messageId: tables.annotations.messageId,
+            span: tables.annotations.span,
+            sentenceRewrite: tables.annotations.sentenceRewrite,
+            termId: tables.annotations.termId,
+          })
           .from(tables.annotations)
-          .where(inArray(tables.annotations.messageId, ids))
+          .innerJoin(tables.terms, eq(tables.annotations.termId, tables.terms.id))
+          .where(and(
+            inArray(tables.annotations.messageId, ids),
+            isNull(tables.terms.userId),
+            ne(tables.terms.kind, "keyword"),
+          ))
       : [];
   const annotationsByMessage = new Map<
     number,

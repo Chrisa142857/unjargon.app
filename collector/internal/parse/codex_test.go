@@ -67,4 +67,7 @@ func TestForPath(t *testing.T) {
 	if ForPath("/home/u/.codex/sessions/2026/07/16/r.jsonl").Tool() != "codex" {
 		t.Error("codex path should get codex parser")
 	}
+	if ForPath("/home/u/.claude/projects/codex-notes/s.jsonl").Tool() != "claude-code" {
+		t.Error("a Claude project name containing codex should get the Claude parser")
+	}
 }

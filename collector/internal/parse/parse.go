@@ -30,7 +30,7 @@ type Parser interface {
 // ForPath returns a fresh parser for a transcript path. Claude Code is the
 // default; paths under a .codex directory get the Codex rollout parser.
 func ForPath(path string) Parser {
-	if strings.Contains(path, "/.codex/") || strings.Contains(path, "codex") {
+	if strings.Contains(path, "/.codex/") {
 		return NewCodex(path)
 	}
 	return ClaudeCode{}

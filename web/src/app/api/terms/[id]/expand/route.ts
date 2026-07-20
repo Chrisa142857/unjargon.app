@@ -1,4 +1,4 @@
-import { expandTerm } from "@/lib/expand";
+import { expandTerm, LocalExplainerUnavailable } from "@/lib/expand";
 import { requireUser } from "@/lib/auth";
 
 export const dynamic = "force-dynamic";
@@ -54,6 +54,12 @@ export async function POST(
     }
     return Response.json(result);
   } catch (err) {
+    if (err instanceof LocalExplainerUnavailable) {
+      return Response.json(
+        { error: "No connected collector has local explanations enabled. Enable it on a collector, then try again." },
+        { status: 409 },
+      );
+    }
     console.error(`[expand] term ${termId} failed:`, err);
     return Response.json({ error: "expansion failed" }, { status: 502 });
   }

@@ -94,15 +94,16 @@ async function storeDetection(
     }
     if (!term) continue;
     byKey.set(key, { id: term.id, term: term.term });
-    if (inserted) {
-      newTerms.push({
-        id: term.id,
-        term: term.term,
-        domain: term.domain,
-        l1: term.l1,
-        salience: term.salience,
-      });
-    }
+    // The browser may not have this shared term yet, even when another user
+    // created it first. It de-duplicates terms it already has.
+    newTerms.push({
+      id: term.id,
+      term: term.term,
+      domain: term.domain,
+      kind: term.kind,
+      l1: term.l1,
+      salience: term.salience,
+    });
   }
 
   const annotations: DetectionEvent["annotations"] = [];

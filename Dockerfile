@@ -1,9 +1,5 @@
-# Hugging Face Space image: the unjargon backend (Next.js standalone server:
-# API + SSE + the same UI) with Postgres bundled in the container.
-#
-# Data is ephemeral — the free Space filesystem resets on restart/rebuild.
-# For durable storage set a DATABASE_URL Space secret (e.g. Neon free tier);
-# the entrypoint then skips the bundled Postgres entirely.
+# Backend image: the Next.js API, SSE, and UI. DATABASE_URL is required for
+# durable data; bundled Postgres remains as an explicitly warned local fallback.
 
 FROM node:22-slim AS builder
 WORKDIR /app

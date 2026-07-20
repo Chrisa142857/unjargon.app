@@ -7,7 +7,8 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "check:detector": "node --experimental-strip-types scripts/check-detector.ts"
+    "check:detector": "node --experimental-strip-types scripts/check-detector.ts",
+    "check:local-expander": "node --experimental-strip-types scripts/check-local-expander.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.111.0",

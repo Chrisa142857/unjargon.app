@@ -106,7 +106,7 @@ func Detect(mode, stateDir string) (*Translator, error) {
 		} else if _, err := exec.LookPath("codex"); err == nil {
 			// `exec` is non-interactive and ephemeral. Read-only keeps an
 			// explanation request from modifying the user's workspace.
-			cmd = []string{"codex", "exec", "--skip-git-repo-check", "--ephemeral", "--sandbox", "read-only", "--ask-for-approval", "never"}
+			cmd = []string{"codex", "exec", "--skip-git-repo-check", "--ephemeral", "--sandbox", "read-only"}
 		} else if mode == "on" {
 			return nil, fmt.Errorf("local-explain=on but no Claude Code or Codex CLI on PATH (and UNJARGON_TRANSLATE_CMD unset)")
 		} else {

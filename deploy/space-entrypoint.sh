@@ -1,16 +1,14 @@
 #!/bin/sh
-# Entrypoint for the Hugging Face Space container: bring up Postgres (unless
-# an external DATABASE_URL is provided as a Space secret), apply the schema,
-# start the Next.js standalone server on $PORT.
+# Entrypoint for the backend container: connect to Postgres (durable when
+# DATABASE_URL is supplied), apply the schema, then start on $PORT.
 set -eu
 # Surface boot failures in the host's log stream (Render/HF show stdout).
 trap 'code=$?; if [ "$code" -ne 0 ]; then echo "[entrypoint] FAILED with exit code $code — see lines above"; fi' EXIT
 
-PGBIN=$(ls -d /usr/lib/postgresql/*/bin | head -1)
-PGDATA="$HOME/pgdata"
-
 if [ -z "${DATABASE_URL:-}" ]; then
-  echo "[entrypoint] no external DATABASE_URL — using bundled Postgres (ephemeral!)"
+  echo "[entrypoint] WARNING: no DATABASE_URL — using bundled Postgres (ephemeral; not for user data)"
+  PGBIN=$(ls -d /usr/lib/postgresql/*/bin | head -1)
+  PGDATA="$HOME/pgdata"
   if [ ! -s "$PGDATA/PG_VERSION" ]; then
     "$PGBIN/initdb" -D "$PGDATA" --auth=trust -U postgres >/dev/null
   fi
@@ -18,6 +16,9 @@ if [ -z "${DATABASE_URL:-}" ]; then
   "$PGBIN/createdb" -h /tmp -U postgres unjargon 2>/dev/null || true
   export DATABASE_URL="postgres://postgres@localhost:5432/unjargon"
 fi
+
+echo "[entrypoint] checking database connection"
+psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -qtAc 'SELECT 1' >/dev/null
 
 echo "[entrypoint] applying schema migrations"
 for f in ./drizzle/*.sql; do

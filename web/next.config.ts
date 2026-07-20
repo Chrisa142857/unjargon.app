@@ -4,8 +4,8 @@ import type { NextConfig } from "next";
 // - default: full-stack server (output: standalone) — runs UI + API + SSE in
 //   one Node process; this is what the Hugging Face Space container runs.
 // - BUILD_TARGET=pages: static export of the UI only for GitHub Pages; the
-//   API routes are moved aside by scripts/build-pages.sh and the client
-//   talks to the Space via NEXT_PUBLIC_API_BASE (CORS below).
+//   API routes are moved aside by scripts/build-pages.sh. Data pages redirect
+//   to NEXT_PUBLIC_API_BASE so SameSite authentication stays on the API origin.
 const isPages = process.env.BUILD_TARGET === "pages";
 
 const nextConfig: NextConfig = {

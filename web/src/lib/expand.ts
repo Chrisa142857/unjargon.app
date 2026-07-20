@@ -11,9 +11,11 @@ import {
   groundingUserPrompt,
   localConceptPrompt,
   localGroundingPrompt,
+  type CalibrationLevel,
 } from "@/lib/prompts";
-import { getCalibration, getUserCalibration } from "@/lib/settings";
+import { getUserCalibration } from "@/lib/settings";
 import { serverCanLLM } from "@/lib/llm";
+import { hasLiveLocalExpander } from "@/lib/local-expander";
 
 // Lazy L2/L3 generation. Two separate calls — a privacy AND cost boundary:
 // L2 (basic concept) is generic, generated without any transcript content,
@@ -24,6 +26,16 @@ import { serverCanLLM } from "@/lib/llm";
 // default.
 
 const SNIPPET_MAX = 1200;
+
+export class LocalExplainerUnavailable extends Error {}
+
+async function localExpanderAvailable(userId: number) {
+  const devices = await db
+    .select({ importStatus: tables.devices.importStatus })
+    .from(tables.devices)
+    .where(eq(tables.devices.userId, userId));
+  return hasLiveLocalExpander(devices.map((device) => device.importStatus));
+}
 
 export async function expandTerm(
   termId: number,
@@ -47,13 +59,20 @@ export async function expandTerm(
   if (term.userId !== null && term.userId !== userId) return null;
   const [profile] = await db.select().from(tables.userTerms).where(and(eq(tables.userTerms.userId, userId), eq(tables.userTerms.termId, termId)));
   const pending = { concept: false, grounding: false };
+  const server = serverCanLLM();
+  const local = !server && await localExpanderAvailable(userId);
 
   let l2 = term.l2;
   if (!l2 && opts.action === "concept") {
-    if (serverCanLLM()) {
-      l2 = await callConcept({ term: term.term, domain: term.domain, l1: term.l1 });
+    if (server) {
+      l2 = await callConcept({
+        term: term.term,
+        domain: term.domain,
+        l1: term.l1,
+      });
       await db.update(tables.terms).set({ l2 }).where(eq(tables.terms.id, termId));
     } else {
+      if (!local) throw new LocalExplainerUnavailable();
       // No-key server: queue for the user's own collector (idempotent).
       await db
         .insert(tables.expansionRequests)
@@ -66,16 +85,15 @@ export async function expandTerm(
   // Cached L3 is free to return; generating one happens only on request.
   let l3 = profile?.l3 ?? null;
   if (!l3 && opts.action === "grounding") {
-    if (serverCanLLM()) {
+    if (server) {
       const src = await groundingSource(termId, userId, opts.sourceMessageId);
-      l3 = await callGrounding({
-        term: term.term,
-        domain: term.domain,
-        l1: term.l1,
-        ...src,
-      });
+      l3 = await callGrounding(
+        await getUserCalibration(userId),
+        { term: term.term, domain: term.domain, l1: term.l1, ...src },
+      );
       await db.insert(tables.userTerms).values({ userId, termId, l3 }).onConflictDoUpdate({ target: [tables.userTerms.userId, tables.userTerms.termId], set: { l3 } });
     } else {
+      if (!local) throw new LocalExplainerUnavailable();
       await db
         .insert(tables.expansionRequests)
         .values({ termId, userId, grounding: true, messageId: opts.sourceMessageId ?? null })
@@ -87,8 +105,8 @@ export async function expandTerm(
       .select({ grounding: tables.expansionRequests.grounding })
       .from(tables.expansionRequests)
       .where(and(eq(tables.expansionRequests.termId, termId), eq(tables.expansionRequests.userId, userId)));
-    pending.concept = !l2 && requests.some((request) => !request.grounding);
-    pending.grounding = !l3 && requests.some((request) => request.grounding);
+    pending.concept = local && !l2 && requests.some((request) => !request.grounding);
+    pending.grounding = local && !l3 && requests.some((request) => request.grounding);
   }
 
   return { l2, l3, l3Available: true, pending };
@@ -170,11 +188,11 @@ export async function claimExpansionWork(
     await db.delete(tables.expansionRequests).where(eq(tables.expansionRequests.id, req.id));
     return null;
   }
-  const level = await getUserCalibration(userId);
   const base = { term: term.term, domain: term.domain, l1: term.l1 };
   if (!req.grounding) {
-    return { id: req.id, prompt: localConceptPrompt(level, base) };
+    return { id: req.id, prompt: localConceptPrompt(base) };
   }
+  const level = await getUserCalibration(userId);
   const src = await groundingSource(req.termId, userId, req.messageId ?? undefined);
   return { id: req.id, prompt: localGroundingPrompt(level, { ...base, ...src }) };
 }
@@ -233,7 +251,7 @@ async function callConcept(input: {
   const resp = await client.messages.create({
     model: EXPLANATION_MODEL,
     max_tokens: 500,
-    system: conceptSystemPrompt(await getCalibration()),
+    system: conceptSystemPrompt(),
     messages: [{ role: "user", content: conceptUserPrompt(input) }],
     tools: [conceptTool],
     tool_choice: { type: "tool", name: "emit_concept" },
@@ -248,7 +266,7 @@ async function callConcept(input: {
 }
 
 // L3: grounded in the user's own source message, cached per-user only.
-async function callGrounding(input: {
+async function callGrounding(level: CalibrationLevel, input: {
   term: string;
   domain: string;
   l1: string;
@@ -267,7 +285,7 @@ async function callGrounding(input: {
   const resp = await client.messages.create({
     model: EXPLANATION_MODEL,
     max_tokens: 500,
-    system: groundingSystemPrompt(await getCalibration()),
+    system: groundingSystemPrompt(level),
     messages: [{ role: "user", content: groundingUserPrompt(input) }],
     tools: [groundingTool],
     tool_choice: { type: "tool", name: "emit_grounding" },

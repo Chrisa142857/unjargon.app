@@ -11,10 +11,10 @@ const CALIBRATION_DESCRIPTIONS: Record<CalibrationLevel, string> = {
   expert: "an expert in adjacent fields — keep it terse",
 };
 
-export function conceptSystemPrompt(level: CalibrationLevel): string {
-  return `You are unjargon, a glossary for users delegating work to AI agents. The user explicitly requested an explanation of one detected term. They are ${CALIBRATION_DESCRIPTIONS[level]}.
+export function conceptSystemPrompt(): string {
+  return `You are unjargon, a glossary for users delegating work to AI agents. The user explicitly requested an explanation of one detected term.
 
-Produce, via the emit_concept tool, "level2" — the basic concept in 3-4 sentences with an everyday analogy. This explanation is shared with other users: keep it fully generic, about the term itself only.`;
+Produce, via the emit_concept tool, "level2" — the basic concept in 3-4 sentences with clear everyday language and an analogy. This explanation is shared with other users: keep it fully generic, about the term itself only.`;
 }
 
 export function conceptUserPrompt(input: { term: string; domain: string; l1: string }): string {
@@ -49,8 +49,8 @@ export function groundingUserPrompt(input: {
 
 const HEADLESS_TEXT_RULE = `\n\nYou are running headless with no tools. Reply with ONLY one JSON object — no prose or markdown — of the form {"text": "<the explanation>"}.`;
 
-export function localConceptPrompt(level: CalibrationLevel, input: { term: string; domain: string; l1: string }): string {
-  return `${conceptSystemPrompt(level)}\n\n${conceptUserPrompt(input)}${HEADLESS_TEXT_RULE}`;
+export function localConceptPrompt(input: { term: string; domain: string; l1: string }): string {
+  return `${conceptSystemPrompt()}\n\n${conceptUserPrompt(input)}${HEADLESS_TEXT_RULE}`;
 }
 
 export function localGroundingPrompt(

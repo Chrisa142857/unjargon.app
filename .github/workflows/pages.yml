@@ -3,8 +3,8 @@
 # One-time repo setup:
 #   1. Settings → Pages → Source: "GitHub Actions"
 #   2. Settings → Secrets and variables → Actions → Variables →
-#      new repository variable UNJARGON_API_BASE = https://<user>-unjargon.hf.space
-#      (the Hugging Face Space that runs the backend; see DEPLOY.md)
+#      new repository variable UNJARGON_API_BASE = https://unjargon.onrender.com
+#      (the Render backend that runs the API; see DEPLOY.md)
 name: Deploy frontend to GitHub Pages
 
 on:
@@ -40,8 +40,7 @@ jobs:
       - run: npm ci
         working-directory: web
       # Backend URL priority: explicit UNJARGON_API_BASE variable, else derived
-      # from the HF_SPACE variable ("user/space" → https://user-space.hf.space),
-      # else empty (the site asks for a backend URL at runtime).
+      # from the optional HF_SPACE variable, else the managed Render backend.
       - name: Resolve API base
         id: apibase
         env:

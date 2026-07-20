@@ -2,12 +2,14 @@
 # (Hugging Face marked the Docker SDK as paid for new Spaces, so Render's
 # card-free tier is the free backend path; the same image works on both.)
 #
-# One-click: https://render.com/deploy?repo=https://github.com/Chrisa142857/unjargon.app
+# Blueprint deploy (after creating unjargon-db):
+# https://render.com/deploy?repo=https://github.com/Chrisa142857/unjargon.app
 #
 # Free-tier behavior: sleeps after ~15 min idle (first request wakes it,
-# ~1 min cold start); container disk is ephemeral, so the bundled Postgres
-# resets on restart — set a DATABASE_URL env var (e.g. Neon free tier) for
-# durable storage; the entrypoint switches automatically.
+# ~1 min cold start). Production data needs a managed Postgres choice from the
+# owner. The DATABASE_URL reference below requires an existing `unjargon-db`;
+# it is intentionally not declared here so a Blueprint sync cannot silently
+# create an expiring free database or a billable one.
 services:
   - type: web
     name: unjargon
@@ -18,8 +20,12 @@ services:
     envVars:
       - key: PORT
         value: "7860"
+      - key: DATABASE_URL
+        fromDatabase:
+          name: unjargon-db
+          property: connectionString
       # Optional overrides (set in the dashboard when wanted):
       # GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, AUTH_SECRET, APP_URL=https://unjargon.onrender.com
       # ANTHROPIC_API_KEY      — optional, only for explanation buttons
       # UNJARGON_FAKE_TRANSLATOR=1 — canned on-demand explanation demo mode
-      # DATABASE_URL           — external Postgres (Neon) for durable data
+      # Create unjargon-db in Oregon, choose its plan, then sync this Blueprint.

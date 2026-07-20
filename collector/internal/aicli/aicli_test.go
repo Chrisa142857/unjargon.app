@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -69,7 +70,7 @@ func TestDetectUsesCodexWhenClaudeIsMissing(t *testing.T) {
 	if err != nil || tr == nil {
 		t.Fatalf("Detect(auto) = %v, %v", tr, err)
 	}
-	if got := tr.Command[0]; got != "codex" {
-		t.Fatalf("command = %q, want codex", got)
+	if got, want := strings.Join(tr.Command, " "), "codex exec --skip-git-repo-check --ephemeral --sandbox read-only"; got != want {
+		t.Fatalf("command = %q, want %q", got, want)
 	}
 }

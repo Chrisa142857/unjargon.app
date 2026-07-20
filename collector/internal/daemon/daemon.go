@@ -120,6 +120,7 @@ func (d *Daemon) Run() error {
 	workTick := time.NewTicker(30 * time.Second)
 	defer workTick.Stop()
 
+	go d.reportStatus()
 	d.scan()
 	d.poll()
 	for {
@@ -132,6 +133,7 @@ func (d *Daemon) Run() error {
 				log.Printf("offline queue: flushed %d, %d left (err=%v)", n, d.queue.Len(), err)
 			}
 		case <-workTick.C:
+			go d.reportStatus()
 			// Explicit explanation work runs separately so AI calls never stall
 			// transcript tailing.
 			if d.cfg.Expander != nil && d.workBusy.CompareAndSwap(false, true) {
@@ -208,13 +210,17 @@ func (d *Daemon) expandWork() {
 	}
 }
 
-// reportStatus records optional explanation usage. Detection progress is
-// wholly server-side and never waits on this budget.
+// reportStatus records whether this collector can serve an explicit
+// explanation. Detection progress is wholly server-side and never waits.
 func (d *Daemon) reportStatus() {
-	used, limit, resetAt := d.cfg.Expander.BudgetStatus()
-	body := map[string]any{"budget_used": used, "budget_limit": limit}
-	if used >= limit && !resetAt.IsZero() {
-		body["paused_until"] = resetAt.UTC().Format(time.RFC3339)
+	body := map[string]any{"budget_used": 0, "budget_limit": 0}
+	if d.cfg.Expander != nil {
+		used, limit, resetAt := d.cfg.Expander.BudgetStatus()
+		body["budget_used"] = used
+		body["budget_limit"] = limit
+		if used >= limit && !resetAt.IsZero() {
+			body["paused_until"] = resetAt.UTC().Format(time.RFC3339)
+		}
 	}
 	data, _ := json.Marshal(body)
 	req, err := http.NewRequest(http.MethodPost, d.cfg.Shipper.ServerURL+"/api/status", bytes.NewReader(data))

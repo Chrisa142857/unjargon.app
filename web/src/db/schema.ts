@@ -160,8 +160,8 @@ export const expansionRequests = pgTable("expansion_requests", {
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
 }, (t) => [uniqueIndex("expansion_requests_unique").on(t.termId, t.userId, t.grounding)]);
 
-// Single-user key/value settings (calibration level etc.); becomes per-user
-// when auth lands.
+// Legacy key/value settings retained for existing databases. Calibration is
+// per-user on users.
 export const settings = pgTable("settings", {
   key: text("key").primaryKey(),
   value: text("value").notNull(),

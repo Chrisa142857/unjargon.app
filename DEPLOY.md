@@ -21,23 +21,41 @@ mirror on your own github.io domain. Collectors point at the backend either way.
 
 [![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/Chrisa142857/unjargon.app)
 
-1. Click the button (sign in to https://render.com with GitHub — the free
-   tier needs no card) and approve the blueprint; `render.yaml` provisions
-   the `unjargon` web service from this repo's `Dockerfile` on the free plan
-   with Google login and per-device pairing. There is no shared `INGEST_TOKEN`:
-   each collector exchanges a short-lived browser pairing code for its own
-   device credential.
-2. When the first deploy finishes, copy the service URL
+1. In Render, create a Postgres database named `unjargon-db` in **Oregon** and
+   choose its plan. The free 1 GB option is fine for a short demo; it expires
+   after 30 days and has no backups.
+2. Click the button (sign in to https://render.com with GitHub) and approve
+   the blueprint. It provisions the `unjargon` web service and supplies its
+   `DATABASE_URL` from that database over Render's private network. There is
+   no shared `INGEST_TOKEN`: each collector exchanges a short-lived browser
+   pairing code for its own device credential.
+3. When the first deploy finishes, copy the service URL
    (`https://unjargon-<hash>.onrender.com`).
-3. Point the frontend at it: paste the URL into the connect field on the
+4. Point the frontend at it: paste the URL into the connect field on the
    Pages site (instant, per-browser), and/or add it as the repo Actions
    variable `UNJARGON_API_BASE` so the next Pages build bakes it in.
 
-Render auto-redeploys the service on every push to `main`. Free-tier
-caveats: the service sleeps after ~15 min idle (first request wakes it,
-~1 min cold start) and the bundled Postgres is ephemeral — for durable
-data set a `DATABASE_URL` env var (e.g. https://neon.tech free tier);
-the entrypoint switches automatically.
+Render auto-redeploys the service on every push to `main`. Without
+`DATABASE_URL`, it emits a clear startup warning and uses bundled Postgres;
+that storage is erased whenever the service sleeps, restarts, or redeploys.
+
+### Required production database choice
+
+Before collecting real user data, choose a durable Postgres plan. Render's
+free 1 GB Postgres survives service restarts but expires after 30 days and has
+no backups, so it is only suitable for a demo. This choice is deliberately not
+made by `render.yaml`: it would otherwise silently create either an expiring
+free database or a billable one.
+
+### Existing Render service
+
+The already-running service will not gain a database merely from a normal Git
+push. In Render, create a Postgres database named `unjargon-db` in Oregon and
+choose its plan, then sync the updated Blueprint. Its `DATABASE_URL` reference
+uses the database's private connection string. A Blueprint sync fails safely
+until that named database exists. For an external provider instead, set its
+connection string as the `unjargon` service's `DATABASE_URL` in the Render
+dashboard and do not sync the Render-database reference unchanged.
 
 ## 1b. Backend — Hugging Face Space (Docker SDK now paid; no local git needed)
 
@@ -66,13 +84,11 @@ Point a collector at it:
   -server https://<hf-user>-unjargon.hf.space
 ```
 
-**Free-tier caveats (bundled Postgres):** the container filesystem is
-ephemeral — messages and glossary reset when the Space rebuilds or restarts,
-and free Spaces sleep after ~48h of inactivity (first request wakes them,
-cold start takes a minute). For durable data, create a free
-[Neon](https://neon.tech) Postgres and set its connection string as a
-`DATABASE_URL` Space secret — the entrypoint then skips the bundled Postgres
-automatically.
+**Database requirement for durable data:** set a durable `DATABASE_URL` Space
+secret before starting the container. Without it, the entrypoint logs an
+ephemeral-storage warning; data resets when the Space rebuilds or restarts.
+Free Spaces still sleep after ~48h of inactivity (first request wakes them,
+cold start takes a minute).
 
 ## 2. Frontend — GitHub Pages
 

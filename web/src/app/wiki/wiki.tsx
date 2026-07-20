@@ -30,6 +30,10 @@ export default function Wiki() {
     (async () => {
       try {
         const res = await fetch(api("/api/wiki"));
+        if (res.status === 401) {
+          window.location.assign(api("/api/auth/google"));
+          return;
+        }
         if (!res.ok) throw new Error(`wiki fetch failed (${res.status})`);
         const data = await res.json();
         if (!cancelled) setTerms(data.terms);
@@ -140,8 +144,8 @@ function TermRow({
     setError(null);
     try {
       const res = await fetch(api(`/api/terms/${t.id}/expand`));
-      if (!res.ok) throw new Error(`expand failed (${res.status})`);
-      const data = await res.json();
+      const data = await res.json().catch(() => null);
+      if (!res.ok) throw new Error(data?.error ?? `expand failed (${res.status})`);
       setPending(data.pending ?? { concept: false, grounding: false });
       onExpanded(data.l2, data.l3);
     } catch (err) {
@@ -169,8 +173,8 @@ function TermRow({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action }),
       });
-      if (!res.ok) throw new Error(`expand failed (${res.status})`);
-      const data = await res.json();
+      const data = await res.json().catch(() => null);
+      if (!res.ok) throw new Error(data?.error ?? `expand failed (${res.status})`);
       setPending(data.pending ?? { concept: false, grounding: false });
       onExpanded(data.l2, data.l3);
     } catch (err) {
@@ -217,8 +221,9 @@ function TermRow({
       {open && (
         <div className="border-t border-neutral-800 px-3 py-3 text-sm leading-relaxed">
           <p className="text-neutral-200">{t.l1}</p>
+          {error && <p className="mt-3 text-red-400/90">couldn&apos;t load — {error}</p>}
           {!t.l2 && pending.concept ? (
-            <p className="mt-3 animate-pulse text-sm text-neutral-500">queued — your collector is explaining this…</p>
+            <p className="mt-3 animate-pulse text-sm text-neutral-500">queued — a connected collector is explaining this…</p>
           ) : !t.l2 ? (
             <button
               onClick={loadConcept}
@@ -235,7 +240,7 @@ function TermRow({
           ) : grounding ? (
             <Layer title="In your sessions" body={null} loading={true} error={error} />
           ) : pending.grounding ? (
-            <p className="mt-3 animate-pulse text-xs text-neutral-500">queued — your collector will explain this in your context…</p>
+            <p className="mt-3 animate-pulse text-xs text-neutral-500">queued — a connected collector will explain this in your context…</p>
           ) : (
             <button
               onClick={loadGrounding}

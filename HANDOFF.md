@@ -1,6 +1,6 @@
 # unjargon handoff
 
-Last updated: 2026-07-19
+Last updated: 2026-07-20
 
 ## Product boundary
 
@@ -25,8 +25,10 @@ digests.
   bearer credential after pairing.
 - Required Render secrets: `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`,
   `AUTH_SECRET`, `APP_URL=https://unjargon.onrender.com`, and durable
-  `DATABASE_URL` if persistent data is wanted. `ANTHROPIC_API_KEY` is optional
-  and only serves explicit explanation clicks.
+  `DATABASE_URL` before storing real user data. `render.yaml` expects an
+  owner-created Render Postgres named `unjargon-db`; free Render Postgres
+  expires after 30 days, so choose a durable plan or external URL first.
+  `ANTHROPIC_API_KEY` is optional and only serves explicit explanation clicks.
 
 ## Current zero-AI pipeline
 
@@ -60,6 +62,9 @@ Automatic detection has no model call on Render or the collector.
 - With `ANTHROPIC_API_KEY`, Render fulfils the explicit request.
 - Without one, `/api/work/expand` queues the request for the paired collector.
   The local CLI budget remains capped at 30 × 30 seconds per rolling 5 hours.
+- A no-key server queues only when at least one of the user's collectors has
+  recently reported local explanations enabled; otherwise the button returns
+  a clear setup error instead of waiting forever.
 - New collectors use `-local-explain` / `UNJARGON_LOCAL_EXPLAIN`; `auto`
   selects Claude Code or Codex when present. The old `-local-translate`
   setting is only a compatibility alias and no longer translates messages.
@@ -101,7 +106,7 @@ cd collector && gofmt -w cmd/unjargond/main.go internal/aicli/aicli.go internal/
 
 ## Next practical step
 
-After publishing a collector release, reinstall it on a test macOS and Linux
-machine. Pair it, import existing Claude Code and Codex history, and use
-`/live` to confirm progress advances and a term card performs no network
-`POST` until an explicit explanation button is pressed.
+Create and wire the durable `DATABASE_URL`, then publish a collector release
+and reinstall it on a test macOS and Linux machine. Pair it, import existing
+Claude Code and Codex history, and use `/live` to confirm progress advances
+and an explicit explanation works only from a collector that reports ready.

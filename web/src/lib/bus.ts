@@ -5,42 +5,50 @@ import { EventEmitter } from "node:events";
 // a single Railway-style service). If we ever deploy to serverless, swap the
 // internals for Postgres LISTEN/NOTIFY — the interface stays the same.
 
-export type MessageEvent = {
-  userId: number;
+export type StreamMessage = {
+  id: number;
+  sessionId: number;
+  device: string;
+  tool: string;
+  cwd: string | null;
+  ts: string;
+  text: string;
+};
+
+export type StreamAnnotation = {
+  id: number;
+  span: string;
+  sentenceRewrite: string;
+  termId: number | null;
+};
+
+export type StreamTerm = {
+  id: number;
+  term: string;
+  domain: string;
+  kind: string;
+  l1: string;
+  salience: number | null;
+};
+
+export type ClientMessageEvent = {
   type: "message";
-  message: {
-    id: number;
-    sessionId: number;
-    device: string;
-    tool: string;
-    cwd: string | null;
-    ts: string;
-    text: string;
-  };
+  message: StreamMessage;
 };
 
 // Result of the zero-AI detector for one message. The message always stays
 // verbatim; annotations simply make detected terms tappable.
-export type DetectionEvent = {
-  userId: number;
+export type ClientDetectionEvent = {
   type: "detection";
   messageId: number;
   sessionId: number;
-  annotations: {
-    id: number;
-    span: string;
-    sentenceRewrite: string;
-    termId: number | null;
-  }[];
-  newTerms: {
-    id: number;
-    term: string;
-    domain: string;
-    l1: string;
-    salience: number | null;
-  }[];
+  annotations: StreamAnnotation[];
+  newTerms: StreamTerm[];
 };
 
+export type ClientStreamEvent = ClientMessageEvent | ClientDetectionEvent;
+export type MessageEvent = ClientMessageEvent & { userId: number };
+export type DetectionEvent = ClientDetectionEvent & { userId: number };
 export type StreamEvent = MessageEvent | DetectionEvent;
 
 const globalForBus = globalThis as unknown as { __unjargonBus?: EventEmitter };

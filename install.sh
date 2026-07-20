@@ -38,6 +38,9 @@ fi
 [ -n "$PAIR_CODE" ] || { echo "error: pairing code cannot be empty" >&2; exit 2; }
 DEVICE=$(hostname | tr -cd 'A-Za-z0-9._-')
 TOKEN=$(curl -fsS -X POST --data-urlencode "code=$PAIR_CODE" --data-urlencode "device=$DEVICE" "$SERVER/api/devices/claim") || { echo "error: could not claim this device" >&2; exit 1; }
+# Services start with a minimal environment; include common user CLI bins plus
+# the safe system locations instead of relying on an interactive shell PATH.
+CLI_PATH="$HOME/.local/bin:$HOME/.npm-global/bin:$HOME/.volta/bin:$HOME/.asdf/shims:$HOME/.bun/bin:$HOME/.cargo/bin:$HOME/.local/share/pnpm:$HOME/Library/pnpm:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:/Applications/ChatGPT.app/Contents/Resources:$HOME/Applications/ChatGPT.app/Contents/Resources"
 
 OS=$(uname -s | tr '[:upper:]' '[:lower:]')
 case "$(uname -m)" in
@@ -80,6 +83,7 @@ umask 077
 cat > "$CONF_DIR/env" <<EOF
 UNJARGON_SERVER=$SERVER
 UNJARGON_TOKEN=$TOKEN
+UNJARGON_DEVICE=$DEVICE
 UNJARGON_BACKFILL=all
 UNJARGON_LOCAL_EXPLAIN=auto
 EOF
@@ -141,6 +145,9 @@ elif [ "$OS" = darwin ]; then
   <key>ProgramArguments</key><array><string>$BIN</string><string>run</string></array>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><true/>
+  <key>EnvironmentVariables</key><dict>
+    <key>PATH</key><string>$CLI_PATH</string>
+  </dict>
   <key>StandardOutPath</key><string>$STATE_DIR/unjargond.log</string>
   <key>StandardErrorPath</key><string>$STATE_DIR/unjargond.log</string>
 </dict>
@@ -159,6 +166,7 @@ After=network-online.target
 
 [Service]
 ExecStart=$BIN run
+Environment="PATH=$CLI_PATH"
 Restart=on-failure
 RestartSec=5
 

@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { api, apiBase, apiBaseIsBuiltIn, bounceToApiOrigin, setApiBase } from "@/lib/api";
+import type { ClientStreamEvent } from "@/lib/bus";
 import AccountMenu from "@/app/account-menu";
 
 export type LiveAnnotation = {
@@ -284,6 +285,7 @@ export default function LiveStream() {
   const [messages, setMessages] = useState<LiveMessage[]>([]);
   const [terms, setTerms] = useState<LiveTerm[]>([]);
   const [freshTermIds, setFreshTermIds] = useState<Set<number>>(new Set());
+  const knownTermIds = useRef<Set<number>>(new Set());
   const [loaded, setLoaded] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [connected, setConnected] = useState(false);
@@ -314,6 +316,7 @@ export default function LiveStream() {
             ...live.filter((m: LiveMessage) => !seen.has(m.id)),
           ];
         });
+        for (const term of data.terms) knownTermIds.current.add(term.id);
         setTerms((live) => {
           const seen = new Set<number>(data.terms.map((t: LiveTerm) => t.id));
           return [...data.terms, ...live.filter((t) => !seen.has(t.id))];
@@ -373,7 +376,7 @@ export default function LiveStream() {
     es.onopen = () => setConnected(true);
     es.onerror = () => setConnected(false);
     es.onmessage = (e) => {
-      const event = JSON.parse(e.data);
+      const event: ClientStreamEvent = JSON.parse(e.data);
       if (event.type === "message") {
         const m: LiveMessage = {
           ...event.message,
@@ -412,15 +415,22 @@ export default function LiveStream() {
         );
         setProgress((p) => ({ ...p, detected: p.detected + 1, ratePerHour }));
         const now = new Date().toISOString();
-        if (event.newTerms.length > 0) {
+        const freshTerms = event.newTerms.filter((t) => !knownTermIds.current.has(t.id));
+        if (freshTerms.length > 0) {
+          for (const term of freshTerms) knownTermIds.current.add(term.id);
           setTerms((prev) => {
             const seen = new Set(prev.map((t) => t.id));
-            const fresh = event.newTerms
-              .filter((t: LiveTerm) => !seen.has(t.id))
-              .map((t: LiveTerm) => ({
-                ...t,
-                l2: t.l2 ?? null,
-                l3: t.l3 ?? null,
+            const fresh = freshTerms
+              .filter((t) => !seen.has(t.id))
+              .map((t) => ({
+                id: t.id,
+                term: t.term,
+                domain: t.domain,
+                kind: t.kind,
+                l1: t.l1,
+                l2: null,
+                l3: null,
+                salience: t.salience,
                 learnedAt: null,
                 lastSeenAt: now,
               }));
@@ -428,7 +438,7 @@ export default function LiveStream() {
           });
           setFreshTermIds((prev) => {
             const next = new Set(prev);
-            for (const t of event.newTerms) next.add(t.id);
+            for (const t of freshTerms) next.add(t.id);
             return next;
           });
         }
@@ -521,7 +531,8 @@ export default function LiveStream() {
           <select
             value={calibration}
             onChange={(e) => changeCalibration(e.target.value as Calibration)}
-            title="explain like I'm…"
+            title="in-session explanation style"
+            aria-label="in-session explanation style"
             className="rounded-md border border-neutral-700 bg-neutral-950 px-1.5 py-1 text-xs text-neutral-400"
           >
             {CALIBRATION_LABELS.map(([value, label]) => (
@@ -741,8 +752,8 @@ function InlineTermCard({
   async function refresh() {
     try {
       const res = await fetch(api(`/api/terms/${term.id}/expand`));
-      if (!res.ok) throw new Error(`expand failed (${res.status})`);
-      const data = await res.json();
+      const data = await res.json().catch(() => null);
+      if (!res.ok) throw new Error(data?.error ?? `expand failed (${res.status})`);
       setPending(data.pending ?? { concept: false, grounding: false });
       onExpanded(term.id, data.l2, data.l3);
     } catch (err) {
@@ -771,8 +782,8 @@ function InlineTermCard({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ messageId, action }),
       });
-      if (!res.ok) throw new Error(`expand failed (${res.status})`);
-      const data = await res.json();
+      const data = await res.json().catch(() => null);
+      if (!res.ok) throw new Error(data?.error ?? `expand failed (${res.status})`);
       setPending(data.pending ?? { concept: false, grounding: false });
       onExpanded(term.id, data.l2, data.l3);
     } catch (err) {
@@ -833,7 +844,7 @@ function InlineTermCard({
             ) : term.l2 ? (
               <p className="text-neutral-200">{term.l2}</p>
             ) : pending.concept ? (
-              <p className="animate-pulse text-neutral-500">queued — your collector is explaining this…</p>
+              <p className="animate-pulse text-neutral-500">queued — a connected collector is explaining this…</p>
             ) : !error ? (
               <button
                 onClick={loadConcept}
@@ -854,7 +865,7 @@ function InlineTermCard({
                 <div className="h-3 w-4/6 rounded bg-neutral-800" />
               </div>
             ) : pending.grounding ? (
-              <p className="mt-3 animate-pulse text-xs text-neutral-500">queued — your collector will explain this in your context…</p>
+              <p className="mt-3 animate-pulse text-xs text-neutral-500">queued — a connected collector will explain this in your context…</p>
             ) : (
               <button
                 onClick={loadGrounding}
