@@ -2,7 +2,7 @@ import { eq } from "drizzle-orm";
 import { db, tables } from "@/db";
 import type { CalibrationLevel } from "@/lib/prompts";
 
-// Calibration is read on every translation/expansion call, so cache briefly.
+// Calibration is read for optional explanation calls, so cache briefly.
 const TTL_MS = 5000;
 
 const globalForSettings = globalThis as unknown as {

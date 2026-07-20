@@ -30,6 +30,7 @@ WORKDIR /app
 COPY --chown=node:node --from=builder /app/.next/standalone ./
 COPY --chown=node:node --from=builder /app/.next/static ./.next/static
 COPY --chown=node:node --from=builder /app/public ./public
+COPY --chown=node:node --from=builder /app/data ./data
 COPY --chown=node:node web/drizzle ./drizzle
 COPY --chown=node:node deploy/space-entrypoint.sh ./space-entrypoint.sh
 

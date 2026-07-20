@@ -2,13 +2,7 @@ import { eq } from "drizzle-orm";
 import { db, tables } from "@/db";
 import { deviceForRequest } from "@/lib/auth";
 import { publish } from "@/lib/bus";
-import { scheduleDigestCheck } from "@/lib/digest";
-import { recordKnownSightings } from "@/lib/glossary";
-import {
-  scheduleTranslation,
-  storeProvidedTranslation,
-  type TranslationResult,
-} from "@/lib/translate";
+import { scheduleDetection } from "@/lib/detection";
 
 export const dynamic = "force-dynamic";
 
@@ -17,9 +11,7 @@ type IngestBody = {
   tool: string;
   session_id: string;
   cwd?: string;
-  // translation is present when the collector ran local-translate mode
-  // (the user's own AI CLI); the server then skips its own LLM call.
-  messages: { ts: string; text: string; translation?: TranslationResult }[];
+  messages: { ts: string; text: string }[];
 };
 
 function bad(status: number, error: string) {
@@ -79,10 +71,6 @@ export async function POST(req: Request) {
     )
     .returning();
 
-  // Shared-glossary pass (no AI): terms other users already paid to extract
-  // surface on this user's board immediately, even before any translation.
-  await recordKnownSightings(stored, userId);
-
   for (const row of stored) {
     publish({
       userId,
@@ -95,28 +83,13 @@ export async function POST(req: Request) {
         cwd: session.cwd,
         ts: row.ts.toISOString(),
         text: row.text,
-        subtitle: row.subtitle,
       },
     });
   }
 
-  // Collector-provided translations (local-translate mode) store directly;
-  // anything without one goes through the server-side pipeline (needs
-  // ANTHROPIC_API_KEY or the fake translator).
-  let needServerTranslation = false;
-  for (let i = 0; i < stored.length; i++) {
-    const provided = msgs[i].translation;
-    if (provided && typeof provided === "object") {
-      await storeProvidedTranslation(stored[i], provided);
-    } else {
-      needServerTranslation = true;
-    }
-  }
-  if (needServerTranslation) {
-    scheduleTranslation(session.id);
-  } else {
-    scheduleDigestCheck(session.id); // everything translated; roll up if due
-  }
+  // Deliberately ignore any `translation` field sent by an older collector.
+  // Detection happens server-side with no AI call and also backfills history.
+  scheduleDetection(userId);
 
   return Response.json({ stored: stored.length });
 }

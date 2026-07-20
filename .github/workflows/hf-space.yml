@@ -4,8 +4,6 @@
 # One-time repo setup (all in browser UIs, see DEPLOY.md):
 #   - variable HF_SPACE            = <hf-username>/<space-name>   (e.g. wei/unjargon)
 #   - secret   HF_TOKEN            = a Hugging Face WRITE token
-#   - secret   UNJARGON_INGEST_TOKEN = any string; becomes the Space's
-#     INGEST_TOKEN secret, which collectors present to POST /api/ingest
 # Until HF_SPACE is set, this workflow is a silent no-op.
 name: Sync backend to Hugging Face Space
 
@@ -35,25 +33,3 @@ jobs:
             echo "::error::HF_SPACE is set but the HF_TOKEN secret is missing"; exit 1
           fi
           git push --force "https://oauth:${HF_TOKEN}@huggingface.co/spaces/${HF_SPACE}" HEAD:main
-      - name: Set the Space's INGEST_TOKEN secret
-        env:
-          HF_TOKEN: ${{ secrets.HF_TOKEN }}
-          HF_SPACE: ${{ vars.HF_SPACE }}
-          INGEST_TOKEN: ${{ secrets.UNJARGON_INGEST_TOKEN }}
-        run: |
-          if [ -z "$INGEST_TOKEN" ]; then
-            echo "UNJARGON_INGEST_TOKEN secret not set — add it, or set INGEST_TOKEN in the Space settings yourself"
-            exit 0
-          fi
-          # Upsert: POST creates, 409 means it exists → PATCH updates.
-          code=$(curl -s -o /dev/null -w "%{http_code}" -X POST \
-            "https://huggingface.co/api/spaces/${HF_SPACE}/secrets" \
-            -H "Authorization: Bearer ${HF_TOKEN}" -H "Content-Type: application/json" \
-            -d "{\"key\":\"INGEST_TOKEN\",\"value\":\"${INGEST_TOKEN}\"}")
-          echo "create secret → HTTP $code"
-          if [ "$code" = "409" ] || [ "$code" = "400" ]; then
-            curl -s -o /dev/null -w "update secret → HTTP %{http_code}\n" -X PATCH \
-              "https://huggingface.co/api/spaces/${HF_SPACE}/secrets" \
-              -H "Authorization: Bearer ${HF_TOKEN}" -H "Content-Type: application/json" \
-              -d "{\"key\":\"INGEST_TOKEN\",\"value\":\"${INGEST_TOKEN}\"}"
-          fi

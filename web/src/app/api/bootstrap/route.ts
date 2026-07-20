@@ -1,6 +1,7 @@
-import { and, count, countDistinct, desc, eq, inArray, max, min, ne, sql } from "drizzle-orm";
+import { and, count, countDistinct, desc, eq, inArray, isNull, max, min, ne, sql } from "drizzle-orm";
 import { db, tables } from "@/db";
 import { requireUser } from "@/lib/auth";
+import { scheduleDetection } from "@/lib/detection";
 
 export const dynamic = "force-dynamic";
 
@@ -8,31 +9,22 @@ export const dynamic = "force-dynamic";
 // client-side (rather than server-rendering) so the same static export can
 // run on GitHub Pages against a remote API.
 //
-// Long sessions: messages already covered by a digest are collapsed —
-// the response carries digest cards plus only the uncovered tail.
 export async function GET(req: Request) {
   const user = await requireUser(req);
   if (user instanceof Response) return user;
-  const digestRows = await db
-    .select()
-    .from(tables.digests)
-    .innerJoin(tables.sessions, eq(tables.digests.sessionId, tables.sessions.id))
-    .innerJoin(tables.devices, eq(tables.sessions.deviceId, tables.devices.id))
-    .where(and(ne(tables.digests.summary, ""), eq(tables.devices.userId, user.id)))
-    .orderBy(desc(tables.digests.id))
-    .limit(200);
-  const digests = digestRows.map((r) => r.digests).reverse();
 
-  // Truthful import status: total = messages received, completed = messages
-  // with a translation verdict, rate = translations finished in the last hour
-  // (measured from translated_at — never inferred from upload recency).
+  // Start the zero-AI, oldest-first history pass. `detected_at` is separate
+  // from legacy AI processing, so existing history is not skipped.
+  scheduleDetection(user.id);
+
+  // Truthful import status: completed means jargon detection finished.
   const hourAgo = new Date(Date.now() - 3600_000).toISOString();
   const [progress] = await db
     .select({
       messages: count(tables.messages.id),
-      translated: count(tables.messages.translatedAt),
-      translatedLastHour: count(
-        sql`case when ${tables.messages.translatedAt} > ${hourAgo}::timestamptz then 1 end`,
+      detected: count(tables.messages.detectedAt),
+      detectedLastHour: count(
+        sql`case when ${tables.messages.detectedAt} > ${hourAgo}::timestamptz then 1 end`,
       ),
       sessions: countDistinct(tables.sessions.id),
       firstMessageAt: min(tables.messages.ts),
@@ -44,65 +36,13 @@ export async function GET(req: Request) {
     .innerJoin(tables.devices, eq(tables.sessions.deviceId, tables.devices.id))
     .where(eq(tables.devices.userId, user.id));
 
-  // Per-device AI budget, as reported by the user's collectors via
-  // POST /api/status — surfaced because unjargon spends the USER'S own AI
-  // credentials, so usage must be visible, not just the pause it causes.
-  const deviceRows = await db
-    .select({ name: tables.devices.name, importStatus: tables.devices.importStatus })
-    .from(tables.devices)
-    .where(eq(tables.devices.userId, user.id));
-  let pausedUntil: string | null = null;
-  const budgets: {
-    device: string;
-    used: number;
-    limit: number;
-    pausedUntil: string | null;
-    updatedAt: string | null;
-  }[] = [];
-  for (const d of deviceRows) {
-    if (!d.importStatus) continue;
-    try {
-      const s = JSON.parse(d.importStatus) as {
-        pausedUntil?: string | null;
-        budgetUsed?: number;
-        budgetLimit?: number;
-        updatedAt?: string;
-      };
-      budgets.push({
-        device: d.name,
-        used: Number(s.budgetUsed) || 0,
-        limit: Number(s.budgetLimit) || 0,
-        pausedUntil: s.pausedUntil ?? null,
-        updatedAt: s.updatedAt ?? null,
-      });
-      if (
-        s.pausedUntil &&
-        Date.parse(s.pausedUntil) > Date.now() &&
-        (!pausedUntil || s.pausedUntil > pausedUntil)
-      ) {
-        pausedUntil = s.pausedUntil;
-      }
-    } catch {} // unreadable status — ignore that device
-  }
-
-  // Per session, everything up to the newest digest is covered.
-  const coveredTo = new Map<number, number>();
-  for (const d of digests) {
-    coveredTo.set(
-      d.sessionId,
-      Math.max(coveredTo.get(d.sessionId) ?? 0, d.toMessageId),
-    );
-  }
-
   const rows = await db
     .select({
       id: tables.messages.id,
       sessionId: tables.messages.sessionId,
       ts: tables.messages.ts,
       text: tables.messages.text,
-      subtitle: tables.messages.subtitle,
-      importance: tables.messages.importance,
-      translatedAt: tables.messages.translatedAt,
+      detectedAt: tables.messages.detectedAt,
       device: tables.devices.name,
       tool: tables.sessions.tool,
       cwd: tables.sessions.cwd,
@@ -113,11 +53,7 @@ export async function GET(req: Request) {
     .where(eq(tables.devices.userId, user.id))
     .orderBy(desc(tables.messages.id))
     .limit(100);
-  const uncovered = rows.filter(
-    (r) => r.id > (coveredTo.get(r.sessionId) ?? 0),
-  );
-
-  const ids = uncovered.map((r) => r.id);
+  const ids = rows.map((r) => r.id);
   const annotationRows =
     ids.length > 0
       ? await db
@@ -167,32 +103,20 @@ export async function GET(req: Request) {
     .innerJoin(tables.sessions, eq(tables.messages.sessionId, tables.sessions.id))
     .innerJoin(tables.devices, eq(tables.sessions.deviceId, tables.devices.id))
     .leftJoin(tables.userTerms, and(eq(tables.userTerms.termId, tables.terms.id), eq(tables.userTerms.userId, user.id)))
-    .where(eq(tables.devices.userId, user.id))
+    .where(and(eq(tables.devices.userId, user.id), isNull(tables.terms.userId), ne(tables.terms.kind, "keyword")))
     .groupBy(tables.terms.id, tables.userTerms.l3, tables.userTerms.learnedAt);
 
   return Response.json({
     calibration: user.calibration,
     progress: {
       messages: Number(progress.messages),
-      translated: Number(progress.translated),
-      ratePerHour: Number(progress.translatedLastHour),
-      pausedUntil,
-      budgets,
+      detected: Number(progress.detected),
+      ratePerHour: Number(progress.detectedLastHour),
       sessions: Number(progress.sessions),
       firstMessageAt: progress.firstMessageAt?.toISOString() ?? null,
       lastMessageAt: progress.lastMessageAt?.toISOString() ?? null,
       lastImportedAt: progress.lastImportedAt?.toISOString() ?? null,
     },
-    digests: digests.map((d) => ({
-      id: d.id,
-      sessionId: d.sessionId,
-      fromMessageId: d.fromMessageId,
-      toMessageId: d.toMessageId,
-      fromTs: d.fromTs.toISOString(),
-      toTs: d.toTs.toISOString(),
-      messageCount: d.messageCount,
-      summary: d.summary,
-    })),
     terms: termRows.map((t) => ({
       id: t.id,
       term: t.term,
@@ -205,7 +129,7 @@ export async function GET(req: Request) {
       learnedAt: t.learnedAt?.toISOString() ?? null,
       lastSeenAt: (t.lastSeenAt ?? t.createdAt).toISOString(),
     })),
-    messages: uncovered.reverse().map((r) => ({
+    messages: rows.reverse().map((r) => ({
       id: r.id,
       sessionId: r.sessionId,
       device: r.device,
@@ -213,9 +137,7 @@ export async function GET(req: Request) {
       cwd: r.cwd,
       ts: r.ts.toISOString(),
       text: r.text,
-      subtitle: r.subtitle,
-      importance: r.importance,
-      translated: r.translatedAt !== null,
+      detected: r.detectedAt !== null,
       annotations: annotationsByMessage.get(r.id) ?? [],
     })),
   });

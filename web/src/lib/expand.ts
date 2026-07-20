@@ -2,7 +2,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import { and, asc, desc, eq, isNull, lt } from "drizzle-orm";
 import { db, tables } from "@/db";
 import {
-  TRANSLATION_MODEL,
+  EXPLANATION_MODEL,
   conceptSystemPrompt,
   conceptTool,
   conceptUserPrompt,
@@ -13,7 +13,7 @@ import {
   localGroundingPrompt,
 } from "@/lib/prompts";
 import { getCalibration, getUserCalibration } from "@/lib/settings";
-import { serverCanLLM } from "@/lib/digest";
+import { serverCanLLM } from "@/lib/llm";
 
 // Lazy L2/L3 generation. Two separate calls — a privacy AND cost boundary:
 // L2 (basic concept) is generic, generated without any transcript content,
@@ -28,7 +28,7 @@ const SNIPPET_MAX = 1200;
 export async function expandTerm(
   termId: number,
   userId: number,
-  opts: { sourceMessageId?: number; grounding?: boolean } = {},
+  opts: { sourceMessageId?: number; action?: "concept" | "grounding" } = {},
 ): Promise<
   | {
       l2: string | null;
@@ -43,13 +43,13 @@ export async function expandTerm(
     .from(tables.terms)
     .where(eq(tables.terms.id, termId));
   if (!term) return null;
-  // Another user's private keyword: not visible, not expandable.
+  // Another user's private legacy row: not visible, not expandable.
   if (term.userId !== null && term.userId !== userId) return null;
   const [profile] = await db.select().from(tables.userTerms).where(and(eq(tables.userTerms.userId, userId), eq(tables.userTerms.termId, termId)));
   const pending = { concept: false, grounding: false };
 
   let l2 = term.l2;
-  if (!l2) {
+  if (!l2 && opts.action === "concept") {
     if (serverCanLLM()) {
       l2 = await callConcept({ term: term.term, domain: term.domain, l1: term.l1 });
       await db.update(tables.terms).set({ l2 }).where(eq(tables.terms.id, termId));
@@ -65,7 +65,7 @@ export async function expandTerm(
 
   // Cached L3 is free to return; generating one happens only on request.
   let l3 = profile?.l3 ?? null;
-  if (!l3 && opts.grounding) {
+  if (!l3 && opts.action === "grounding") {
     if (serverCanLLM()) {
       const src = await groundingSource(termId, userId, opts.sourceMessageId);
       l3 = await callGrounding({
@@ -82,19 +82,13 @@ export async function expandTerm(
         .onConflictDoNothing();
     }
   }
-  if (!l3) {
-    // Report an already-queued grounding request so the card can poll.
-    const [pend] = await db
-      .select({ id: tables.expansionRequests.id })
+  if (!l2 || !l3) {
+    const requests = await db
+      .select({ grounding: tables.expansionRequests.grounding })
       .from(tables.expansionRequests)
-      .where(
-        and(
-          eq(tables.expansionRequests.termId, termId),
-          eq(tables.expansionRequests.userId, userId),
-          eq(tables.expansionRequests.grounding, true),
-        ),
-      );
-    pending.grounding = !!pend;
+      .where(and(eq(tables.expansionRequests.termId, termId), eq(tables.expansionRequests.userId, userId)));
+    pending.concept = !l2 && requests.some((request) => !request.grounding);
+    pending.grounding = !l3 && requests.some((request) => request.grounding);
   }
 
   return { l2, l3, l3Available: true, pending };
@@ -237,7 +231,7 @@ async function callConcept(input: {
   requireLLM();
   const client = new Anthropic();
   const resp = await client.messages.create({
-    model: TRANSLATION_MODEL,
+    model: EXPLANATION_MODEL,
     max_tokens: 500,
     system: conceptSystemPrompt(await getCalibration()),
     messages: [{ role: "user", content: conceptUserPrompt(input) }],
@@ -271,7 +265,7 @@ async function callGrounding(input: {
   requireLLM();
   const client = new Anthropic();
   const resp = await client.messages.create({
-    model: TRANSLATION_MODEL,
+    model: EXPLANATION_MODEL,
     max_tokens: 500,
     system: groundingSystemPrompt(await getCalibration()),
     messages: [{ role: "user", content: groundingUserPrompt(input) }],

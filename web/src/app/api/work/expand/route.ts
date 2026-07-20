@@ -1,5 +1,5 @@
 import { deviceForRequest } from "@/lib/auth";
-import { serverCanLLM } from "@/lib/digest";
+import { serverCanLLM } from "@/lib/llm";
 import { claimExpansionWork } from "@/lib/expand";
 
 export const dynamic = "force-dynamic";

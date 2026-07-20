@@ -6,13 +6,13 @@
 #
 # Flags:
 #   --pair CODE     pairing code from the web app (prompts when omitted)
-#   --server URL    unjargon web app (default https://unjargon.app)
+#   --server URL    unjargon web app (default https://unjargon.onrender.com)
 #   --binary PATH   use a locally built unjargond instead of downloading
 #   --no-service    install binary + config only, don't register a service
 set -eu
 
 PAIR_CODE=""
-SERVER="https://unjargon.app"
+SERVER="https://unjargon.onrender.com"
 BINARY=""
 SERVICE=1
 
@@ -81,7 +81,7 @@ cat > "$CONF_DIR/env" <<EOF
 UNJARGON_SERVER=$SERVER
 UNJARGON_TOKEN=$TOKEN
 UNJARGON_BACKFILL=all
-UNJARGON_LOCAL_TRANSLATE=auto
+UNJARGON_LOCAL_EXPLAIN=auto
 EOF
 echo "wrote $CONF_DIR/env"
 
@@ -176,11 +176,11 @@ fi
 
 echo
 echo "unjargon collector installed. Start (or continue) a Claude Code session"
-echo "on this machine, then open $SERVER/live — subtitles should appear."
+echo "on this machine, then open $SERVER/live — detected jargon should appear."
 echo "Existing Claude Code and Codex sessions are imported once on this install."
 echo
-echo "AI usage notice: translation is capped at 30 calls of at most 30 seconds"
-echo "per rolling 5 hours (15 minutes / 5% of local AI runtime). History waits"
-echo "for the next window rather than skipping jargon extraction. To opt out entirely:"
-echo "  echo 'UNJARGON_LOCAL_TRANSLATE=off' >> $CONF_DIR/env"
-echo "(the server then translates instead, if it has an ANTHROPIC_API_KEY)."
+echo "AI usage notice: importing and detecting jargon use zero AI calls."
+echo "AI is used only after you press an explanation button in unjargon, capped"
+echo "at 30 calls of at most 30 seconds per rolling 5 hours. To disable local"
+echo "on-demand explanations entirely:"
+echo "  echo 'UNJARGON_LOCAL_EXPLAIN=off' >> $CONF_DIR/env"

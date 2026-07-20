@@ -22,9 +22,8 @@ type Shipper struct {
 }
 
 type Message struct {
-	TS          string             `json:"ts"`
-	Text        string             `json:"text"`
-	Translation *parse.Translation `json:"translation,omitempty"`
+	TS   string `json:"ts"`
+	Text string `json:"text"`
 }
 
 type Batch struct {
@@ -49,32 +48,11 @@ func (s *Shipper) FromMessages(tool string, msgs []parse.AgentMessage) Batch {
 	}
 	for _, m := range msgs {
 		b.Messages = append(b.Messages, Message{
-			TS:          m.Timestamp.UTC().Format(time.RFC3339Nano),
-			Text:        redact.Clean(m.Text),
-			Translation: redactTranslation(m.Translation),
+			TS:   m.Timestamp.UTC().Format(time.RFC3339Nano),
+			Text: redact.Clean(m.Text),
 		})
 	}
 	return b
-}
-
-// redactTranslation cleans the text fields of a locally produced translation
-// — it was generated from the unredacted original, so a secret could have
-// been echoed into the subtitle or a rewrite.
-func redactTranslation(t *parse.Translation) *parse.Translation {
-	if t == nil {
-		return nil
-	}
-	out := *t
-	out.Subtitle = redact.Clean(t.Subtitle)
-	out.Annotations = append([]parse.Annotation(nil), t.Annotations...)
-	for i := range out.Annotations {
-		out.Annotations[i].SentenceRewrite = redact.Clean(out.Annotations[i].SentenceRewrite)
-	}
-	out.Terms = append([]parse.Term(nil), t.Terms...)
-	for i := range out.Terms {
-		out.Terms[i].Level1 = redact.Clean(out.Terms[i].Level1)
-	}
-	return &out
 }
 
 // Send posts messages as one batch, with internal retry/backoff.

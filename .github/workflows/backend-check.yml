@@ -37,20 +37,13 @@ jobs:
           expect 401 GET  /api/wiki
           expect 401 GET  /api/stream
           expect 401 POST /api/ingest '{"device":"x","tool":"t","session_id":"s","messages":[]}'
-          expect 401 GET  /api/work/translate
-          expect 401 POST /api/work/translate '{"items":[]}'
-          expect 401 GET  /api/work/digest
           expect 401 GET  /api/work/expand
           expect 401 POST /api/work/expand/1 '{"text":"x"}'
           expect 401 POST /api/status '{"budget_used":0,"budget_limit":30}'
           expect 401 POST /api/terms/1/expand '{}'
+          expect 401 GET  /api/terms/1/expand
           expect 401 POST /api/terms/1/learned
           expect 401 GET  /api/settings
-          echo "--- GET /api/prompt (unauthenticated by design) ---"
-          prompt=$(curl -s --max-time 15 "$URL/api/prompt")
-          echo "$prompt" | head -c 200; echo
-          echo "$prompt" | grep -q '{{MESSAGE}}' && echo "OK   prompt has {{MESSAGE}}" || { echo "FAIL prompt missing {{MESSAGE}}"; fail=1; }
-          echo "$prompt" | grep -q 'PRIVACY' && echo "OK   prompt has latest privacy rules (current build)" || { echo "FAIL prompt missing privacy rules — Render still on an older build"; fail=1; }
           echo "--- OAuth start (needs GOOGLE_* env on Render) ---"
           code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 "$URL/api/auth/google") || code=000
           case "$code" in 30[127]) echo "OK   /api/auth/google redirects ($code)";; *) echo "WARN /api/auth/google → $code (check GOOGLE_CLIENT_ID/SECRET/AUTH_SECRET env)";; esac
@@ -79,7 +72,7 @@ jobs:
           echo "$(wc -l < chunks.txt) chunks referenced"
           : > bundle.js
           while read -r c; do curl -s --max-time 20 "https://chrisa142857.github.io$c" >> bundle.js; done < chunks.txt
-          for marker in 'explain in my sessions' 'AI calls used' 'queued — your collector' 'Explaining your agent history'; do
+          for marker in 'explain what this means' 'explain in my sessions' 'Finding jargon in your history'; do
             if grep -q "$marker" bundle.js live.html; then echo "OK   frontend has: $marker"; else echo "FAIL frontend missing: $marker (stale Pages build?)"; fail=1; fi
           done
           exit $fail

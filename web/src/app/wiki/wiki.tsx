@@ -136,14 +136,10 @@ function TermRow({
   // No-key servers queue the work for the user's collector; poll while pending.
   const [pending, setPending] = useState({ concept: false, grounding: false });
 
-  async function expand(level?: "grounding") {
+  async function refresh() {
     setError(null);
     try {
-      const res = await fetch(api(`/api/terms/${t.id}/expand`), {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ level }),
-      });
+      const res = await fetch(api(`/api/terms/${t.id}/expand`));
       if (!res.ok) throw new Error(`expand failed (${res.status})`);
       const data = await res.json();
       setPending(data.pending ?? { concept: false, grounding: false });
@@ -156,7 +152,7 @@ function TermRow({
   const pollRef = useRef<() => void>(() => {});
   useEffect(() => {
     pollRef.current = () => {
-      expand();
+      refresh();
     };
   });
   useEffect(() => {
@@ -165,22 +161,40 @@ function TermRow({
     return () => window.clearInterval(timer);
   }, [open, pending.concept, pending.grounding]);
 
-  // Opening shows the shared basic explanation (L1 + L2) only; the
-  // in-context layer costs one AI call and is behind an explicit button.
-  async function toggle() {
+  async function requestExplanation(action: "concept" | "grounding") {
+    setError(null);
+    try {
+      const res = await fetch(api(`/api/terms/${t.id}/expand`), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action }),
+      });
+      if (!res.ok) throw new Error(`expand failed (${res.status})`);
+      const data = await res.json();
+      setPending(data.pending ?? { concept: false, grounding: false });
+      onExpanded(data.l2, data.l3);
+    } catch (err) {
+      setError(String(err));
+    }
+  }
+
+  // Reading a term cannot spend AI; buttons below make that choice explicit.
+  function toggle() {
     const next = !open;
     setOpen(next);
-    if (next && !t.l2 && !loading) {
-      setLoading(true);
-      await expand();
-      setLoading(false);
-    }
+  }
+
+  async function loadConcept() {
+    if (loading) return;
+    setLoading(true);
+    await requestExplanation("concept");
+    setLoading(false);
   }
 
   async function loadGrounding() {
     if (grounding) return;
     setGrounding(true);
-    await expand("grounding");
+    await requestExplanation("grounding");
     setGrounding(false);
   }
 
@@ -205,6 +219,14 @@ function TermRow({
           <p className="text-neutral-200">{t.l1}</p>
           {!t.l2 && pending.concept ? (
             <p className="mt-3 animate-pulse text-sm text-neutral-500">queued — your collector is explaining this…</p>
+          ) : !t.l2 ? (
+            <button
+              onClick={loadConcept}
+              className="mt-3 rounded-md border border-neutral-700 px-2 py-1 text-xs text-neutral-400 hover:text-neutral-100"
+              title="asks your configured AI for a generic explanation — costs one AI call"
+            >
+              explain what this means · 1 AI call
+            </button>
           ) : (
             <Layer title="What it is" body={t.l2} loading={loading} error={error} />
           )}

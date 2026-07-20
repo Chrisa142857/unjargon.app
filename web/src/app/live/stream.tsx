@@ -16,7 +16,7 @@ export type LiveTerm = {
   id: number;
   term: string;
   domain: string;
-  kind: string; // "keyword" | "term" | "initial"
+  kind: string; // "term" | "initial"
   l1: string;
   l2: string | null;
   l3: string | null;
@@ -33,47 +33,20 @@ export type LiveMessage = {
   cwd: string | null;
   ts: string;
   text: string;
-  subtitle: string | null;
-  importance: number | null;
-  translated: boolean; // false → translation in flight (typing indicator)
+  detected: boolean;
   annotations: LiveAnnotation[];
-};
-
-// A rollup card standing in for a collapsed stretch of the stream.
-export type LiveDigest = {
-  id: number;
-  sessionId: number;
-  fromMessageId: number;
-  toMessageId: number;
-  fromTs: string;
-  toTs: string;
-  messageCount: number;
-  summary: string;
-};
-
-// One collector's local AI budget: unjargon spends the USER'S own AI
-// credentials (their claude CLI), so usage is always shown, never hidden.
-type DeviceBudget = {
-  device: string;
-  used: number;
-  limit: number;
-  pausedUntil: string | null;
-  updatedAt: string | null;
 };
 
 type ImportProgress = {
   messages: number;
-  translated: number;
-  ratePerHour: number; // translations finished in the last hour (server-measured)
-  pausedUntil: string | null; // collector AI budget resets then
-  budgets: DeviceBudget[];
+  detected: number;
+  ratePerHour: number; // detections finished in the last hour
   sessions: number;
   firstMessageAt: string | null;
   lastMessageAt: string | null;
   lastImportedAt: string | null;
 };
 
-const HIGHLIGHT_THRESHOLD = 0.7;
 const INSTALL_COMMAND =
   "curl -fsSL https://raw.githubusercontent.com/Chrisa142857/unjargon.app/main/install.sh | sh -s -- --server https://unjargon.onrender.com";
 
@@ -247,55 +220,19 @@ function etaLabel(pendingHours: number): string {
   return `~${Math.round(pendingHours / 24)} days`;
 }
 
-// Always-visible AI spend indicator: unjargon runs short calls on the user's
-// own AI credentials, so the current window's usage stays on screen even when
-// no import is running. One collector → "AI 12/30"; several → summed, with
-// the per-device breakdown in the tooltip.
-function BudgetChip({ budgets }: { budgets: DeviceBudget[] }) {
-  const [now] = useState(() => Date.now()); // impure Date.now() must stay out of render
-  const reported = budgets.filter((b) => b.limit > 0);
-  if (reported.length === 0) return null;
-  const used = reported.reduce((n, b) => n + b.used, 0);
-  const limit = reported.reduce((n, b) => n + b.limit, 0);
-  const resting = reported.some(
-    (b) => b.pausedUntil && Date.parse(b.pausedUntil) > now,
-  );
-  const title =
-    "unjargon explains messages using YOUR AI credentials (your claude CLI): " +
-    "short calls capped per rolling 5-hour window, at most 15 minutes (5%) of local AI runtime.\n" +
-    reported
-      .map(
-        (b) =>
-          `${b.device}: ${b.used}/${b.limit} calls used` +
-          (b.updatedAt ? ` (reported ${new Date(b.updatedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })})` : ""),
-      )
-      .join("\n");
-  const warm = resting || used / limit >= 0.8;
-  return (
-    <span
-      title={title}
-      className={`cursor-default rounded-md border px-2 py-1 text-xs ${warm ? "border-amber-300/40 bg-amber-300/10 text-amber-200" : "border-neutral-700 text-neutral-400"}`}
-    >
-      AI {used}/{limit}{resting ? " · resting" : ""}
-    </span>
-  );
-}
-
 function ImportProgressCard({ progress }: { progress: ImportProgress }) {
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
     const timer = window.setInterval(() => setNow(Date.now()), 10_000);
     return () => window.clearInterval(timer);
   }, []);
-  const pending = Math.max(0, progress.messages - progress.translated);
+  const pending = Math.max(0, progress.messages - progress.detected);
   const receiving =
     progress.lastImportedAt !== null &&
     now - Date.parse(progress.lastImportedAt) < 60_000;
   if (progress.messages === 0 || (pending === 0 && !receiving)) return null;
 
-  const paused =
-    progress.pausedUntil !== null && Date.parse(progress.pausedUntil) > now;
-  const pct = Math.floor((progress.translated / progress.messages) * 100);
+  const pct = Math.floor((progress.detected / progress.messages) * 100);
   // ETA from the measured completion rate — never from upload recency.
   const eta =
     pending > 0 && progress.ratePerHour > 0
@@ -304,28 +241,21 @@ function ImportProgressCard({ progress }: { progress: ImportProgress }) {
   const range = progress.firstMessageAt && progress.lastMessageAt
     ? `${dayLabelOf(progress.firstMessageAt)} → ${dayLabelOf(progress.lastMessageAt)}`
     : null;
-  const reported = progress.budgets.filter((b) => b.limit > 0);
-  const budgetUsed = reported.reduce((n, b) => n + b.used, 0);
-  const budgetLimit = reported.reduce((n, b) => n + b.limit, 0);
-
   let status: string;
   if (pending === 0) {
     status = "All caught up — receiving new updates now.";
-  } else if (paused) {
-    const resume = new Date(progress.pausedUntil!).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-    status = `Your AI budget is resting — explaining resumes around ${resume}${eta ? ` (${eta} of work left)` : ""}. Raw history is already browsable.`;
   } else if (eta) {
-    status = `${eta} until everything is explained, at the current pace.`;
+    status = `${eta} until jargon detection finishes, at the current pace.`;
   } else {
-    status = "Waiting for your collector to explain these — raw history is already browsable.";
+    status = "Finding jargon in your history — raw messages are already browsable.";
   }
 
   return (
     <section aria-live="polite" className="mb-6 rounded-xl border border-sky-200/20 bg-sky-300/[0.06] p-5 text-left shadow-[0_0_45px_rgba(125,211,252,0.05)]">
       <div className="flex items-center gap-2 text-sm font-medium text-sky-100">
-        <span className="relative flex h-2.5 w-2.5"><span className={`absolute inline-flex h-full w-full rounded-full bg-sky-300/60 ${paused ? "" : "animate-ping"}`} /><span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-sky-300" /></span>
-        {pending > 0 ? "Explaining your agent history" : "Importing agent history"}
-        {pending > 0 && <span className="ml-auto text-xs font-normal text-sky-200/80">{progress.translated.toLocaleString()} / {progress.messages.toLocaleString()}</span>}
+        <span className="relative flex h-2.5 w-2.5"><span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-sky-300/60" /><span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-sky-300" /></span>
+        {pending > 0 ? "Finding jargon in your history" : "Importing agent history"}
+        {pending > 0 && <span className="ml-auto text-xs font-normal text-sky-200/80">{progress.detected.toLocaleString()} / {progress.messages.toLocaleString()}</span>}
       </div>
       <div className="mt-4 h-1.5 overflow-hidden rounded-full bg-sky-100/10">
         {pending > 0
@@ -334,13 +264,9 @@ function ImportProgressCard({ progress }: { progress: ImportProgress }) {
       </div>
       <div className="mt-4 flex flex-wrap gap-x-5 gap-y-1 text-sm text-neutral-300">
         <span><strong className="text-white">{progress.messages.toLocaleString()}</strong> updates received</span>
+        <span><strong className="text-white">{progress.detected.toLocaleString()}</strong> checked</span>
         <span><strong className="text-white">{progress.sessions.toLocaleString()}</strong> sessions found</span>
         {range && <span>{range}</span>}
-        {budgetLimit > 0 && (
-          <span title="unjargon explains messages with short calls on YOUR AI credentials (your claude CLI), capped per rolling 5-hour window">
-            <strong className="text-white">{budgetUsed}/{budgetLimit}</strong> AI calls used (your credentials)
-          </span>
-        )}
       </div>
       <p className="mt-3 text-xs text-neutral-500">{status}</p>
     </section>
@@ -348,26 +274,22 @@ function ImportProgressCard({ progress }: { progress: ImportProgress }) {
 }
 
 // /live, chips first. The primary surface is the term board: picked
-// keywords/initials/domain terms grouped by domain, bright until opened —
+// domain terms and acronyms grouped by domain, bright until opened —
 // what the agent's work is teaching you, not what the agent said. A slim
-// strip shows the latest agent activity; the full subtitle/original stream
-// (with digests and highlights) is the secondary view behind a toggle.
+// strip shows the latest agent activity; the raw stream is secondary.
 // Data comes from GET /api/bootstrap + the SSE stream, all client-side, so
 // the static GitHub Pages build works against a remote API.
 export default function LiveStream() {
   const [view, setView] = useState<"board" | "stream">("board");
   const [messages, setMessages] = useState<LiveMessage[]>([]);
-  const [digests, setDigests] = useState<LiveDigest[]>([]);
   const [terms, setTerms] = useState<LiveTerm[]>([]);
   const [freshTermIds, setFreshTermIds] = useState<Set<number>>(new Set());
-  const [highlights, setHighlights] = useState(false);
   const [loaded, setLoaded] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [connected, setConnected] = useState(false);
   const [pinned, setPinned] = useState(true);
-  const [showOriginals, setShowOriginals] = useState(false);
   const [calibration, setCalibration] = useState<Calibration>("new");
-  const [progress, setProgress] = useState<ImportProgress>({ messages: 0, translated: 0, ratePerHour: 0, pausedUntil: null, budgets: [], sessions: 0, firstMessageAt: null, lastMessageAt: null, lastImportedAt: null });
+  const [progress, setProgress] = useState<ImportProgress>({ messages: 0, detected: 0, ratePerHour: 0, sessions: 0, firstMessageAt: null, lastMessageAt: null, lastImportedAt: null });
 
   useEffect(() => {
     if (bounceToApiOrigin("/live")) return; // static build → the app runs on the backend
@@ -396,12 +318,6 @@ export default function LiveStream() {
           const seen = new Set<number>(data.terms.map((t: LiveTerm) => t.id));
           return [...data.terms, ...live.filter((t) => !seen.has(t.id))];
         });
-        setDigests((live) => {
-          const seen = new Set<number>(
-            data.digests.map((d: LiveDigest) => d.id),
-          );
-          return [...data.digests, ...live.filter((d) => !seen.has(d.id))];
-        });
         setCalibration(data.calibration);
         setProgress(data.progress);
       } catch (err) {
@@ -413,18 +329,6 @@ export default function LiveStream() {
     return () => {
       cancelled = true;
     };
-  }, []);
-
-  // Global toggle: ⌘J / ctrl-J flips subtitles ⇄ originals everywhere.
-  useEffect(() => {
-    function onKey(e: KeyboardEvent) {
-      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "j") {
-        e.preventDefault();
-        setShowOriginals((v) => !v);
-      }
-    }
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
   }, []);
 
   async function changeCalibration(level: Calibration) {
@@ -460,6 +364,9 @@ export default function LiveStream() {
   }
   const bottomRef = useRef<HTMLDivElement>(null);
   const scrollerRef = useRef<HTMLDivElement>(null);
+  // Bootstrap supplies a one-hour rate, but a fresh import starts at zero.
+  // Keep a tiny local sample so its ETA appears as soon as SSE makes progress.
+  const liveDetection = useRef({ startedAt: 0, count: 0 });
 
   useEffect(() => {
     const es = new EventSource(api("/api/stream"));
@@ -470,8 +377,7 @@ export default function LiveStream() {
       if (event.type === "message") {
         const m: LiveMessage = {
           ...event.message,
-          importance: null,
-          translated: false,
+          detected: false,
           annotations: [],
         };
         setMessages((prev) =>
@@ -483,39 +389,28 @@ export default function LiveStream() {
           lastMessageAt: m.ts,
           lastImportedAt: new Date().toISOString(),
         }));
-      } else if (event.type === "digest") {
-        // A stretch of the stream just rolled up: swap those messages for the card.
-        const d: LiveDigest = event.digest;
-        setDigests((prev) =>
-          prev.some((p) => p.id === d.id)
-            ? prev
-            : [...prev, d].sort((a, b) => a.fromMessageId - b.fromMessageId),
-        );
-        setMessages((prev) =>
-          prev.filter(
-            (m) =>
-              m.sessionId !== d.sessionId ||
-              m.id < d.fromMessageId ||
-              m.id > d.toMessageId,
-          ),
-        );
-      } else if (event.type === "translation") {
+      } else if (event.type === "detection") {
         setMessages((prev) =>
           prev.map((m) =>
             m.id === event.messageId
               ? {
                   ...m,
-                  subtitle: event.subtitle,
-                  importance: event.importance,
-                  translated: true,
+                  detected: true,
                   annotations: event.annotations,
                 }
               : m,
           ),
         );
-        // The server publishes exactly one translation event per message, so
-        // counting them keeps completed/total live between bootstraps.
-        setProgress((p) => ({ ...p, translated: p.translated + 1 }));
+        // The server publishes exactly one detection event per message. The
+        // first-import rate begins at zero, so measure this live sample too.
+        const tick = Date.now();
+        if (liveDetection.current.count === 0) liveDetection.current.startedAt = tick;
+        liveDetection.current.count += 1;
+        const ratePerHour = Math.round(
+          (liveDetection.current.count * 3_600_000) /
+            Math.max(5_000, tick - liveDetection.current.startedAt),
+        );
+        setProgress((p) => ({ ...p, detected: p.detected + 1, ratePerHour }));
         const now = new Date().toISOString();
         if (event.newTerms.length > 0) {
           setTerms((prev) => {
@@ -602,7 +497,6 @@ export default function LiveStream() {
           </span>
         )}
         <span className="ml-auto flex items-center gap-2">
-          <BudgetChip budgets={progress.budgets} />
           <span className="flex overflow-hidden rounded-md border border-neutral-700 text-xs">
             <button
               onClick={() => setView("board")}
@@ -624,32 +518,6 @@ export default function LiveStream() {
             wiki
           </Link>
           <AccountMenu />
-          {view === "stream" && (
-            <>
-              <button
-                onClick={() => setHighlights((v) => !v)}
-                title="only decisions, outcomes, and failures"
-                className={`rounded-md border px-2 py-1 text-xs transition-colors ${
-                  highlights
-                    ? "border-emerald-300/40 bg-emerald-300/10 text-emerald-200"
-                    : "border-neutral-700 text-neutral-400 hover:text-neutral-100"
-                }`}
-              >
-                ★
-              </button>
-              <button
-                onClick={() => setShowOriginals((v) => !v)}
-                title="toggle subtitles ⇄ originals (⌘J)"
-                className={`rounded-md border px-2 py-1 text-xs transition-colors ${
-                  showOriginals
-                    ? "border-amber-300/40 bg-amber-300/10 text-amber-200"
-                    : "border-neutral-700 text-neutral-400 hover:text-neutral-100"
-                }`}
-              >
-                {showOriginals ? "orig" : "sub"}
-              </button>
-            </>
-          )}
           <select
             value={calibration}
             onChange={(e) => changeCalibration(e.target.value as Calibration)}
@@ -679,12 +547,12 @@ export default function LiveStream() {
                       <p>couldn&apos;t reach the unjargon API — {loadError}</p>
                       <BackendPrompt />
                     </>
-                  ) : messages.length === 0 && digests.length === 0 ? (
+                  ) : messages.length === 0 ? (
                     <InstallCollectorCallout />
                   ) : (
                     <>
-                      No terms yet — as your agents work, the jargon they use
-                      lands here, already explained.
+                      No terms yet — unjargon is checking your history for
+                      technical language.
                       <code className="mt-2 block text-sm text-neutral-400">
                         unjargond replay fixtures/session.jsonl
                       </code>
@@ -713,7 +581,7 @@ export default function LiveStream() {
           >
             <div className="mx-auto flex max-w-2xl flex-col gap-7">
               <ImportProgressCard progress={progress} />
-              {messages.length === 0 && digests.length === 0 && (
+              {messages.length === 0 && (
                 <div className="mt-24 text-center text-neutral-500">
                   {!loaded ? (
                     "loading…"
@@ -724,30 +592,11 @@ export default function LiveStream() {
                   )}
                 </div>
               )}
-              {digests.map((d) => (
-                <DigestCard
-                  key={`d${d.id}`}
-                  digest={d}
-                  termsById={termsById}
-                  showOriginal={showOriginals}
-                  onTermExpanded={cacheExpansion}
-                  onTermLearned={markLearned}
-                />
-              ))}
-              {messages
-                .filter(
-                  (m) =>
-                    !highlights ||
-                    (m.translated &&
-                      m.subtitle !== null &&
-                      (m.importance ?? 0) >= HIGHLIGHT_THRESHOLD),
-                )
-                .map((m) => (
+              {messages.map((m) => (
                   <MessageRow
                     key={m.id}
                     message={m}
                     termsById={termsById}
-                    showOriginal={showOriginals}
                     onTermExpanded={cacheExpansion}
                     onTermLearned={markLearned}
                   />
@@ -778,107 +627,22 @@ export default function LiveStream() {
   );
 }
 
-function rangeOf(d: LiveDigest): string {
-  const from = new Date(d.fromTs);
-  const to = new Date(d.toTs);
-  const sameDay = from.toDateString() === to.toDateString();
-  const day = (x: Date) =>
-    x.toLocaleDateString([], { weekday: "short", month: "short", day: "numeric" });
-  const hm = (x: Date) =>
-    x.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-  return sameDay
-    ? `${day(from)} ${hm(from)} – ${hm(to)}`
-    : `${day(from)} ${hm(from)} – ${day(to)} ${hm(to)}`;
-}
-
-// A collapsed stretch of the stream: a rollup summary standing in for
-// messageCount messages. Expanding fetches and shows the real subtitles —
-// a digest is a collapse, never a substitute.
-function DigestCard({
-  digest: d,
-  termsById,
-  showOriginal,
-  onTermExpanded,
-  onTermLearned,
-}: {
-  digest: LiveDigest;
-  termsById: Map<number, LiveTerm>;
-  showOriginal: boolean;
-  onTermExpanded: (termId: number, l2: string | null, l3: string | null) => void;
-  onTermLearned: (termId: number) => void;
-}) {
-  const [expanded, setExpanded] = useState(false);
-  const [inner, setInner] = useState<LiveMessage[] | null>(null);
-  const [error, setError] = useState<string | null>(null);
-
-  async function toggle() {
-    const next = !expanded;
-    setExpanded(next);
-    if (next && inner === null) {
-      try {
-        const res = await fetch(api(`/api/digests/${d.id}/messages`));
-        if (!res.ok) throw new Error(`fetch failed (${res.status})`);
-        const data = await res.json();
-        setInner(data.messages);
-      } catch (err) {
-        setError(String(err));
-      }
-    }
-  }
-
-  return (
-    <section className="rounded-xl border border-neutral-800 bg-neutral-900/50">
-      <button onClick={toggle} className="w-full px-4 py-3 text-left">
-        <p className="mb-1 text-[10px] uppercase tracking-widest text-neutral-500">
-          {rangeOf(d)} · {d.messageCount} updates {expanded ? "▾" : "▸"}
-        </p>
-        <p className="text-base leading-relaxed text-neutral-200">{d.summary}</p>
-      </button>
-      {expanded && (
-        <div className="flex flex-col gap-6 border-t border-neutral-800 px-4 py-4">
-          {error && (
-            <p className="text-sm text-red-400/90">couldn&apos;t load — {error}</p>
-          )}
-          {inner === null && !error && (
-            <p className="text-sm text-neutral-500">loading…</p>
-          )}
-          {inner?.map((m) => (
-            <MessageRow
-              key={m.id}
-              message={m}
-              termsById={termsById}
-              showOriginal={showOriginal}
-              onTermExpanded={onTermExpanded}
-              onTermLearned={onTermLearned}
-            />
-          ))}
-        </div>
-      )}
-    </section>
-  );
-}
-
 const MAX_CHIPS = 4;
 
 function MessageRow({
   message: m,
   termsById,
-  showOriginal,
   onTermExpanded,
   onTermLearned,
 }: {
   message: LiveMessage;
   termsById: Map<number, LiveTerm>;
-  showOriginal: boolean;
   onTermExpanded: (termId: number, l2: string | null, l3: string | null) => void;
   onTermLearned: (termId: number) => void;
 }) {
-  const [expanded, setExpanded] = useState(false);
   const [activeTermId, setActiveTermId] = useState<number | null>(null);
-  const hasSubtitle = m.subtitle !== null;
 
-  // The picked terms for this message: keywords/initials/domain terms the
-  // extraction flagged, most salient first.
+  // The picked terms for this message, most salient first.
   const picked = useMemo(() => {
     const ids = [...new Set(m.annotations.map((a) => a.termId))].filter(
       (id): id is number => id !== null,
@@ -935,54 +699,15 @@ function MessageRow({
         {timeOf(m.ts)}
       </time>
       <div className="min-w-0 flex-1">
-        {!m.translated ? (
-          // Translation in flight: raw text dimmed + typing indicator.
-          <div>
-            <p className="whitespace-pre-wrap text-sm leading-relaxed text-neutral-500">
-              {m.text}
-            </p>
-            <TypingDots />
-          </div>
-        ) : !hasSubtitle ? (
-          // Trivial message: passthrough, untranslated by design.
-          <p className="whitespace-pre-wrap text-lg leading-relaxed text-neutral-300">
-            {m.text}
-          </p>
-        ) : showOriginal ? (
-          // Global ⌘J mode: the verbatim original, highlights still tappable.
-          <div>
-            <AnnotatedOriginal
-              text={m.text}
-              annotations={m.annotations}
-              termsById={termsById}
-              onOpenTerm={setActiveTermId}
-              bare
-            />
-            {termLayer}
-          </div>
-        ) : (
-          <div>
-            <p className="whitespace-pre-wrap text-lg leading-relaxed">
-              {m.subtitle}
-              <button
-                onClick={() => setExpanded((v) => !v)}
-                className="ml-2 inline-block align-baseline text-neutral-500 transition-colors hover:text-neutral-200"
-                title={expanded ? "hide original" : "show original"}
-              >
-                {expanded ? "▾" : "▸"}
-              </button>
-            </p>
-            {expanded && (
-              <AnnotatedOriginal
-                text={m.text}
-                annotations={m.annotations}
-                termsById={termsById}
-                onOpenTerm={setActiveTermId}
-              />
-            )}
-            {termLayer}
-          </div>
-        )}
+        <AnnotatedOriginal
+          text={m.text}
+          annotations={m.annotations}
+          termsById={termsById}
+          onOpenTerm={setActiveTermId}
+          bare
+        />
+        {!m.detected && <p className="mt-1 text-xs text-neutral-600">checking for jargon…</p>}
+        {termLayer}
       </div>
     </article>
   );
@@ -1013,13 +738,9 @@ function InlineTermCard({
   // card polls while any layer is pending so the text appears when delivered.
   const [pending, setPending] = useState({ concept: false, grounding: false });
 
-  async function expand(level?: "grounding") {
+  async function refresh() {
     try {
-      const res = await fetch(api(`/api/terms/${term.id}/expand`), {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ messageId, level }),
-      });
+      const res = await fetch(api(`/api/terms/${term.id}/expand`));
       if (!res.ok) throw new Error(`expand failed (${res.status})`);
       const data = await res.json();
       setPending(data.pending ?? { concept: false, grounding: false });
@@ -1034,7 +755,7 @@ function InlineTermCard({
   const pollRef = useRef<() => void>(() => {});
   useEffect(() => {
     pollRef.current = () => {
-      expand();
+      refresh();
     };
   });
   useEffect(() => {
@@ -1043,25 +764,44 @@ function InlineTermCard({
     return () => window.clearInterval(timer);
   }, [open, pending.concept, pending.grounding]);
 
-  // Opening shows the SHARED basic explanation only (L1 + L2) — no per-user
-  // AI spend. The in-context layer is behind an explicit button below.
+  async function requestExplanation(action: "concept" | "grounding") {
+    try {
+      const res = await fetch(api(`/api/terms/${term.id}/expand`), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ messageId, action }),
+      });
+      if (!res.ok) throw new Error(`expand failed (${res.status})`);
+      const data = await res.json();
+      setPending(data.pending ?? { concept: false, grounding: false });
+      onExpanded(term.id, data.l2, data.l3);
+    } catch (err) {
+      setError(String(err));
+    }
+  }
+
+  // Opening a card only reveals detector output. AI is always an explicit
+  // button press below, never a side effect of reading a term.
   async function toggleLong() {
     const next = !open;
     setOpen(next);
     setError(null);
     if (next) onLearned(term.id);
-    if (next && !term.l2 && !loading) {
-      setLoading(true);
-      await expand();
-      setLoading(false);
-    }
+  }
+
+  async function loadConcept() {
+    if (loading) return;
+    setLoading(true);
+    setError(null);
+    await requestExplanation("concept");
+    setLoading(false);
   }
 
   async function loadGrounding() {
     if (grounding) return;
     setGrounding(true);
     setError(null);
-    await expand("grounding");
+    await requestExplanation("grounding");
     setGrounding(false);
   }
 
@@ -1070,7 +810,7 @@ function InlineTermCard({
     <div className="mt-2 flex overflow-hidden rounded-xl border border-white/10 bg-neutral-900/80 backdrop-blur">
       <div className={`w-1 shrink-0 ${c.bar}`} />
       <div className="min-w-0 flex-1">
-        {/* collapsed: the keyword + the short explanation */}
+        {/* collapsed: the detected term + detector note */}
         <button onClick={toggleLong} className="w-full px-3.5 py-3 text-left">
           <p className="text-sm leading-relaxed">
             <span className={`font-semibold ${c.accent}`}>{term.term}</span>
@@ -1081,7 +821,7 @@ function InlineTermCard({
           </p>
           {!open && <p className="mt-1 text-xs text-neutral-500">more ▸</p>}
         </button>
-        {/* opened: shared basic concept, then the opt-in in-context layer */}
+        {/* opened: detector result, then explicitly requested AI layers */}
         {open && (
           <div className="border-t border-white/[0.06] px-3.5 py-3 text-sm leading-relaxed">
             {error && <p className="text-red-400/90">couldn&apos;t load — {error}</p>}
@@ -1095,7 +835,13 @@ function InlineTermCard({
             ) : pending.concept ? (
               <p className="animate-pulse text-neutral-500">queued — your collector is explaining this…</p>
             ) : !error ? (
-              <p className="text-neutral-500">no deeper explanation available on this server</p>
+              <button
+                onClick={loadConcept}
+                className="rounded-md border border-neutral-700 px-2 py-1 text-xs text-neutral-400 hover:text-neutral-100"
+                title="asks your configured AI for a generic explanation — costs one AI call"
+              >
+                explain what this means · 1 AI call
+              </button>
             ) : null}
             {term.l3 ? (
               <div className="mt-3 border-t border-white/[0.06] pt-2">
@@ -1131,19 +877,8 @@ function InlineTermCard({
   );
 }
 
-function TypingDots() {
-  return (
-    <span className="mt-1 inline-flex gap-1" aria-label="translating">
-      <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-neutral-400 [animation-delay:0ms]" />
-      <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-neutral-400 [animation-delay:150ms]" />
-      <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-neutral-400 [animation-delay:300ms]" />
-    </span>
-  );
-}
-
 // The agent's verbatim text with jargon spans highlighted; tapping a
-// highlight shows the plain-language rewrite of that sentence (the full
-// L1/L2/L3 term card is the next layer down, step 4).
+// highlight opens the detected term (the full explanation is opt-in).
 function AnnotatedOriginal({
   text,
   annotations,
@@ -1155,7 +890,7 @@ function AnnotatedOriginal({
   annotations: LiveAnnotation[];
   termsById: Map<number, LiveTerm>;
   onOpenTerm: (termId: number) => void;
-  bare?: boolean; // ⌘J mode: no box/label, body-size text
+  bare?: boolean; // no box/label, body-size text
 }) {
   const [activeId, setActiveId] = useState<number | null>(null);
 
@@ -1232,9 +967,8 @@ function AnnotatedOriginal({
 }
 
 // The primary surface: the term wall. Newest unlearned terms lead as hero
-// tiles carrying their one-line explanation; the rest are compact tiles;
-// learned terms recede to small pills at the end. Tap anything → collapsed
-// card → long in-context explanation.
+// tiles carrying their detector note; the rest are compact tiles; learned
+// terms recede to small pills at the end. AI explanation is always opt-in.
 function ChipBoard({
   terms,
   freshTermIds,
@@ -1248,9 +982,7 @@ function ChipBoard({
 }) {
   const [activeTermId, setActiveTermId] = useState<number | null>(null);
   const [sort, setSort] = useState<"time" | "domain">("time");
-  const [kindFilter, setKindFilter] = useState<
-    "all" | "keyword" | "term" | "initial"
-  >("all");
+  const [kindFilter, setKindFilter] = useState<"all" | "term" | "initial">("all");
 
   const byTime = useMemo(
     () =>
@@ -1392,9 +1124,8 @@ function ChipBoard({
     </button>
   );
 
-  const KIND_LABELS: ["all" | "keyword" | "term" | "initial", string][] = [
+  const KIND_LABELS: ["all" | "term" | "initial", string][] = [
     ["all", "all"],
-    ["keyword", "keywords"],
     ["term", "terms"],
     ["initial", "initials"],
   ];
@@ -1606,16 +1337,7 @@ function LatestStrip({
       <time className="shrink-0 font-mono text-xs text-neutral-500">
         {timeOf(m.ts)}
       </time>
-      {!m.translated ? (
-        <span className="flex min-w-0 items-center gap-2 text-sm text-neutral-500">
-          <span className="truncate">{m.text}</span>
-          <TypingDots />
-        </span>
-      ) : (
-        <span className="min-w-0 truncate text-sm text-neutral-400">
-          {m.subtitle ?? m.text}
-        </span>
-      )}
+      <span className="min-w-0 truncate text-sm text-neutral-400">{m.text}</span>
       <span className="ml-auto shrink-0 text-xs text-neutral-500">
         stream ▸
       </span>

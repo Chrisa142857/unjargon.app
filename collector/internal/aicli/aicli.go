@@ -1,37 +1,18 @@
-// Package aicli is local-translate mode: instead of the server holding an
-// API key, the collector reuses the AI credentials already on this machine
-// by spawning a fresh headless session of the user's own AI CLI
-// (`claude -p`) for each agent message.
-//
-// Transparency contract: live translation reuses the user's AI CLI, but is
-// capped at 5% of a five-hour local runtime window. It can be turned off with
-// -local-translate=off (the server then translates if it has a key).
-//
-// The prompt template is NOT hard-coded here — it is fetched from the web
-// app's GET /api/prompt, so all prompting stays in web/src/lib/prompts.ts.
+// Package aicli runs only user-requested term explanations with the AI CLI
+// already signed in on this machine. Transcript detection never calls it.
 package aicli
 
 import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"net/http"
 	"os"
 	"os/exec"
 	"strings"
 	"sync"
 	"time"
-
-	"github.com/chrisa142857/unjargon.app/collector/internal/parse"
 )
 
-// Messages shorter than this can't contain explainable jargon; skip them
-// locally instead of wasting one of the user's AI calls (mirrors the server).
-const trivialLength = 20
-
-// Short TTL: the template carries the server's current glossary and domain
-// labels (for dedupe), which grow as the session runs.
-const templateTTL = 30 * time.Second
 const callTimeout = 30 * time.Second
 const budgetWindow = 5 * time.Hour
 const budgetLimit = budgetWindow / 20 // 5% of a five-hour window
@@ -40,9 +21,8 @@ type budgetUse struct {
 	At time.Time `json:"at"`
 }
 
-// ErrBudgetWait means the local AI budget is spent. Callers must not block:
-// they ship raw / stop claiming work and retry after Until — the server keeps
-// untranslated messages queued, so nothing is permanently skipped.
+// ErrBudgetWait means the optional explanation budget is spent. Callers must
+// not block; the user-requested expansion remains queued for a later retry.
 type ErrBudgetWait struct{ Until time.Time }
 
 func (e *ErrBudgetWait) Error() string {
@@ -107,32 +87,31 @@ func (b *budget) status() (used int, resetAt time.Time) {
 }
 
 type Translator struct {
-	ServerURL string
-	Command   []string // CLI invocation; the prompt is appended as final arg
-	Dir       string   // cwd for child sessions — see RecursionGuard
-	Model     string   // passed via --model when using the default claude CLI
-	budget    *budget
-
-	mu         sync.Mutex
-	template   string
-	templateAt time.Time
+	Command []string // CLI invocation; the prompt is appended as final arg
+	Dir     string   // cwd for child sessions — see RecursionGuard
+	Model   string   // passed via --model when using the default claude CLI
+	budget  *budget
 }
 
 // Detect builds a Translator according to mode ("auto" | "on" | "off").
 // In auto mode it quietly returns nil when no AI CLI is available.
-func Detect(mode, serverURL, stateDir string) (*Translator, error) {
+func Detect(mode, stateDir string) (*Translator, error) {
 	if mode == "off" {
 		return nil, nil
 	}
 	cmd, model := commandFromEnv()
 	if cmd == nil {
-		if _, err := exec.LookPath("claude"); err != nil {
-			if mode == "on" {
-				return nil, fmt.Errorf("local-translate=on but no `claude` CLI on PATH (and UNJARGON_TRANSLATE_CMD unset)")
-			}
+		if _, err := exec.LookPath("claude"); err == nil {
+			cmd = []string{"claude", "--output-format", "json", "-p"}
+		} else if _, err := exec.LookPath("codex"); err == nil {
+			// `exec` is non-interactive and ephemeral. Read-only keeps an
+			// explanation request from modifying the user's workspace.
+			cmd = []string{"codex", "exec", "--skip-git-repo-check", "--ephemeral", "--sandbox", "read-only", "--ask-for-approval", "never"}
+		} else if mode == "on" {
+			return nil, fmt.Errorf("local-explain=on but no Claude Code or Codex CLI on PATH (and UNJARGON_TRANSLATE_CMD unset)")
+		} else {
 			return nil, nil
 		}
-		cmd = []string{"claude", "--output-format", "json", "-p"}
 	}
 	// Child sessions run in a marker directory so the daemon can recognize
 	// (and never tail) the transcripts they generate. See RecursionGuard.
@@ -141,11 +120,10 @@ func Detect(mode, serverURL, stateDir string) (*Translator, error) {
 		return nil, err
 	}
 	return &Translator{
-		ServerURL: serverURL,
-		Command:   cmd,
-		Dir:       dir,
-		Model:     model,
-		budget:    newBudget(stateDir),
+		Command: cmd,
+		Dir:     dir,
+		Model:   model,
+		budget:  newBudget(stateDir),
 	}, nil
 }
 
@@ -164,46 +142,20 @@ func commandFromEnv() (cmd []string, model string) {
 }
 
 func (t *Translator) Describe() string {
-	return fmt.Sprintf("%s (model %s, fresh headless session per message, cwd %s)",
+	if t.Command[0] != "claude" {
+		return fmt.Sprintf("%s (fresh headless session per requested explanation, cwd %s)",
+			strings.Join(t.Command, " "), t.Dir)
+	}
+	return fmt.Sprintf("%s (model %s, fresh headless session per requested explanation, cwd %s)",
 		strings.Join(t.Command, " "), t.Model, t.Dir)
 }
 
 // Notice is the transparency banner logged at startup.
 func (t *Translator) Notice() string {
-	return "local-translate mode ON: unjargon makes at most 30 short AI calls per 5 hours\n" +
+	return "local explanation mode ON: unjargon makes no automatic AI calls\n" +
 		"  using YOUR credentials via: " + t.Describe() + "\n" +
-		"  This reserves at most 15 minutes (5%) of local AI runtime. Beyond the cap, messages\n" +
-		"  upload raw immediately and are explained later, oldest first, as budget frees.\n" +
-		"  Disable with -local-translate=off (the server then translates if it has an API key)."
-}
-
-// Translate runs one message through the user's AI CLI. Errors are returned
-// so the caller can leave msg.Translation nil (the message ships raw and the
-// server queues it for the translate-work loop).
-func (t *Translator) Translate(msg *parse.AgentMessage) error {
-	result, err := t.TranslateText(msg.Text)
-	if err != nil {
-		return err
-	}
-	msg.Translation = result
-	return nil
-}
-
-// TranslateText translates one message text — also the work-queue path, where
-// the text comes back from the server (already redacted before it was shipped).
-func (t *Translator) TranslateText(text string) (*parse.Translation, error) {
-	if len(strings.TrimSpace(text)) < trivialLength {
-		return &parse.Translation{Skip: true}, nil
-	}
-	tmpl, err := t.fetchTemplate()
-	if err != nil {
-		return nil, fmt.Errorf("fetch prompt template: %w", err)
-	}
-	out, err := t.Complete(strings.Replace(tmpl, "{{MESSAGE}}", text, 1))
-	if err != nil {
-		return nil, err
-	}
-	return extractTranslation([]byte(out))
+		"  This reserves at most 15 minutes (5%) of local AI runtime for buttons you press.\n" +
+		"  Disable with -local-explain=off."
 }
 
 // BudgetStatus reports local AI budget state for /api/status: calls used in
@@ -214,8 +166,8 @@ func (t *Translator) BudgetStatus() (used, limit int, resetAt time.Time) {
 }
 
 // Complete runs an arbitrary prompt through the user's AI CLI and returns the
-// raw output (a claude-style JSON envelope or bare text). Used for digest
-// work fetched from the server.
+// raw output (a claude-style JSON envelope or bare text). Used for explicit
+// term-expansion work fetched from the server.
 func (t *Translator) Complete(prompt string) (string, error) {
 	if wait := t.budget.reserve(); wait > 0 {
 		return "", &ErrBudgetWait{Until: time.Now().Add(wait)}
@@ -265,25 +217,6 @@ func jsonObject(out string) (string, error) {
 	return text[start : end+1], nil
 }
 
-// ExtractSummary pulls {"summary": ...} out of CLI output — the digest-work
-// response format.
-func ExtractSummary(out string) (string, error) {
-	obj, err := jsonObject(out)
-	if err != nil {
-		return "", err
-	}
-	var body struct {
-		Summary string `json:"summary"`
-	}
-	if err := json.Unmarshal([]byte(obj), &body); err != nil {
-		return "", fmt.Errorf("bad digest JSON: %v", err)
-	}
-	if strings.TrimSpace(body.Summary) == "" {
-		return "", fmt.Errorf("empty digest summary")
-	}
-	return strings.TrimSpace(body.Summary), nil
-}
-
 // ExtractText pulls {"text": ...} out of CLI output — the expansion-work
 // response format.
 func ExtractText(out string) (string, error) {
@@ -303,64 +236,6 @@ func ExtractText(out string) (string, error) {
 	return strings.TrimSpace(body.Text), nil
 }
 
-// extractTranslation handles both a claude-CLI JSON envelope ({"result":
-// "..."}), possibly with markdown fences inside, and bare JSON output.
-func extractTranslation(out []byte) (*parse.Translation, error) {
-	text := string(out)
-	var envelope struct {
-		Result  string `json:"result"`
-		IsError bool   `json:"is_error"`
-	}
-	if err := json.Unmarshal(out, &envelope); err == nil && envelope.Result != "" {
-		if envelope.IsError {
-			return nil, fmt.Errorf("AI CLI reported an error: %.120s", envelope.Result)
-		}
-		text = envelope.Result
-	}
-	start := strings.Index(text, "{")
-	end := strings.LastIndex(text, "}")
-	if start < 0 || end <= start {
-		return nil, fmt.Errorf("no JSON object in AI output: %.120q", text)
-	}
-	var tr parse.Translation
-	if err := json.Unmarshal([]byte(text[start:end+1]), &tr); err != nil {
-		return nil, fmt.Errorf("bad translation JSON: %v", err)
-	}
-	if !tr.Skip && strings.TrimSpace(tr.Subtitle) == "" {
-		tr = parse.Translation{Skip: true} // nothing useful came back
-	}
-	return &tr, nil
-}
-
-func (t *Translator) fetchTemplate() (string, error) {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	if t.template != "" && time.Since(t.templateAt) < templateTTL {
-		return t.template, nil
-	}
-	client := &http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Get(t.ServerURL + "/api/prompt")
-	if err != nil {
-		return "", err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("GET /api/prompt: %s", resp.Status)
-	}
-	var body struct {
-		Template string `json:"template"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
-		return "", err
-	}
-	if !strings.Contains(body.Template, "{{MESSAGE}}") {
-		return "", fmt.Errorf("prompt template missing {{MESSAGE}} placeholder")
-	}
-	t.template = body.Template
-	t.templateAt = time.Now()
-	return t.template, nil
-}
-
 func firstLine(s string) string {
 	s = strings.TrimSpace(s)
 	if i := strings.IndexByte(s, '\n'); i >= 0 {
@@ -373,10 +248,10 @@ func firstLine(s string) string {
 }
 
 // RecursionGuard reports whether a transcript path belongs to one of OUR
-// translation child sessions. Headless `claude -p` runs write transcripts
+// explanation child sessions. Headless `claude -p` runs write transcripts
 // under ~/.claude/projects/<encoded-cwd>/ like any session — without this
-// check the daemon would tail its own translation output and translate it,
-// forever. Child sessions run with cwd .../unjargond-translator, whose
+// check the daemon would tail its own explanation output and loop forever.
+// Child sessions run with cwd .../unjargond-translator, whose
 // encoded form survives in the transcript path.
 func RecursionGuard(path string) bool {
 	return strings.Contains(path, "unjargond-translator")

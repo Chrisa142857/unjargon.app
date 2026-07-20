@@ -27,9 +27,8 @@ for f in ./drizzle/*.sql; do
 done
 
 if [ -z "${ANTHROPIC_API_KEY:-}" ] && [ "${UNJARGON_FAKE_TRANSLATOR:-}" != "1" ]; then
-  echo "[entrypoint] WARNING: no ANTHROPIC_API_KEY secret set — translations will"
-  echo "[entrypoint] pass through as raw text. Set the secret, or set"
-  echo "[entrypoint] UNJARGON_FAKE_TRANSLATOR=1 for the canned offline demo."
+  echo "[entrypoint] no ANTHROPIC_API_KEY — zero-AI jargon detection still works."
+  echo "[entrypoint] Explanation buttons queue to a paired local CLI instead."
 fi
 echo "[entrypoint] starting unjargon on :${PORT:-7860}"
 exec node server.js

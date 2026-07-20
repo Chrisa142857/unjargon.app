@@ -52,9 +52,7 @@ export const sessions = pgTable(
   (t) => [uniqueIndex("sessions_device_key").on(t.deviceId, t.sessionKey)],
 );
 
-// One assistant message. The translation pipeline fills `subtitle`;
-// translatedAt set with subtitle null = passthrough (trivial message,
-// skipped per the trust rules, or translation failed — raw text shows).
+// One assistant message. Raw text always remains the UI source.
 export const messages = pgTable("messages", {
   id: serial("id").primaryKey(),
   sessionId: integer("session_id")
@@ -63,19 +61,18 @@ export const messages = pgTable("messages", {
   ts: timestamp("ts", { withTimezone: true }).notNull(),
   text: text("text").notNull(),
   subtitle: text("subtitle"),
-  // 0-1, from the translation call: how much a catching-up user needs this
-  // message. Drives the highlights filter.
+  // Legacy display fields retained for compatibility with existing databases.
   importance: real("importance"),
+  // Legacy AI-processing data, retained so deployed databases remain readable.
   translatedAt: timestamp("translated_at", { withTimezone: true }),
-  // translate-work queue claim (set when a collector takes the message,
-  // reaped after a TTL) — untranslated messages ARE the import queue.
+  // Zero-AI detector completion marker. Starts NULL for all existing history.
+  detectedAt: timestamp("detected_at", { withTimezone: true }),
+  // Legacy translation queue claim retained for compatibility with databases.
   claimedAt: timestamp("claimed_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
 });
 
-// A rollup card standing in for a contiguous, already-translated stretch of
-// one session's stream ([fromMessageId, toMessageId]). summary '' = claimed
-// by a collector worker but not yet delivered (local-translate digest work).
+// Legacy digest table, retained only for existing databases. It is not used.
 export const digests = pgTable(
   "digests",
   {
@@ -95,24 +92,18 @@ export const digests = pgTable(
   (t) => [uniqueIndex("digests_session_from").on(t.sessionId, t.fromMessageId)],
 );
 
-// A jargon term with layered explanations: L1 one-liner (eager, from
-// extraction), L2 basic concept and L3 "why it's used in your session"
-// (lazy, generated on first click, cached).
-//
-// Privacy boundary: userId NULL = shared generic vocabulary ("term"/"initial"
-// kinds — domain words, acronyms); "keyword" terms (files, commands, internal
-// artifact names) are inherently project-specific and get an owner — never
-// matched, shown, or expanded for anyone else. Uniqueness is per owner via
-// the expression index terms_owner_key (COALESCE(user_id,0), key) in
-// drizzle/0006 — not expressible in this schema DSL, so key is plain here.
+// A jargon term with detector note L1 plus optional AI L2/L3 explanations.
+// Shared terms are generic natural-language vocabulary only. Legacy keyword
+// rows are hidden: artifacts, flags, commands, packages, and identifiers are
+// not jargon.
 export const terms = pgTable("terms", {
   id: serial("id").primaryKey(),
   userId: integer("user_id").references(() => users.id),
   key: text("key").notNull(), // lower-cased canonical name
   term: text("term").notNull(),
   domain: text("domain").notNull(),
-  // "keyword" (files/libraries/commands) | "term" (domain term of art) |
-  // "initial" (acronym/initialism) — drives the board's kind filter.
+  // "term" (domain term of art) | "initial" (acronym/initialism).
+  // "keyword" remains only for legacy rows and is never surfaced.
   kind: text("kind").notNull().default("term"),
   l1: text("l1").notNull(),
   l2: text("l2"),
@@ -143,9 +134,8 @@ export const annotations = pgTable("annotations", {
   termId: integer("term_id").references(() => terms.id),
 });
 
-// Where a term was seen ("seen in 4 sessions on 2 machines"). Written both
-// by translation results and by the no-AI shared-glossary matcher at ingest —
-// the unique index keeps the two paths from double-counting.
+// Where a term was seen ("seen in 4 sessions on 2 machines"). The zero-AI
+// detector writes this alongside its annotations.
 export const termSightings = pgTable("term_sightings", {
   id: serial("id").primaryKey(),
   termId: integer("term_id")

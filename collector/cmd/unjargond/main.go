@@ -1,6 +1,7 @@
 // unjargond is the unjargon.app collector: a dumb tail-and-ship daemon that
 // watches agent transcript files (Claude Code JSONL) and posts new assistant
-// messages to the unjargon web app. All LLM work happens server-side.
+// messages to the unjargon web app. Jargon detection happens server-side
+// without AI; a local CLI is used only for an explanation the user requests.
 package main
 
 import (
@@ -38,14 +39,14 @@ Common flags:
   -server URL   unjargon web app (default http://localhost:3000, env UNJARGON_SERVER)
   -token  TOK   device bearer token (env UNJARGON_TOKEN)
   -device NAME  device name shown in the UI (default hostname, env UNJARGON_DEVICE)
-  -local-translate auto|on|off
-                translate on THIS machine using your own AI CLI (claude -p),
-                capped at 30 calls of at most 30 seconds per rolling 5 hours
-                (15 minutes / 5% of local AI runtime). Beyond the cap, messages
-                upload raw immediately and are explained later, oldest first,
-                as budget frees. auto (default) turns it on when claude is
-                found. off = server translates.
-                (env UNJARGON_LOCAL_TRANSLATE, UNJARGON_TRANSLATE_MODEL,
+  -local-explain auto|on|off
+                allow buttons in unjargon to use THIS machine's AI CLI
+                (Claude Code or Codex) for an explanation. Detection never uses AI.
+                Calls are capped at 30 × 30 seconds per rolling 5 hours.
+                auto (default) enables this when Claude Code or Codex is found.
+                -local-translate is a compatibility alias.
+                (env UNJARGON_LOCAL_EXPLAIN, UNJARGON_LOCAL_TRANSLATE,
+                 UNJARGON_TRANSLATE_MODEL,
                  UNJARGON_TRANSLATE_CMD)
 
 Config file: ~/.config/unjargond/env (KEY=VALUE lines) is loaded at startup;
@@ -132,38 +133,40 @@ func loadEnvFile(path string) {
 	}
 }
 
-func commonFlags(fs *flag.FlagSet) (server, token, device, localTranslate *string) {
+func commonFlags(fs *flag.FlagSet) (server, token, device, localExplain *string) {
 	server = fs.String("server", envOr("UNJARGON_SERVER", "http://localhost:3000"), "unjargon web app URL")
 	token = fs.String("token", os.Getenv("UNJARGON_TOKEN"), "device bearer token")
 	device = fs.String("device", envOr("UNJARGON_DEVICE", hostname()), "device name")
-	localTranslate = fs.String("local-translate", envOr("UNJARGON_LOCAL_TRANSLATE", "auto"),
-		"translate with your own AI CLI on this machine: auto | on | off")
+	defaultExplain := envOr("UNJARGON_LOCAL_EXPLAIN", envOr("UNJARGON_LOCAL_TRANSLATE", "auto"))
+	localExplain = fs.String("local-explain", defaultExplain,
+		"optional AI explanations with your own CLI: auto | on | off")
+	fs.StringVar(localExplain, "local-translate", defaultExplain,
+		"deprecated alias for -local-explain")
 	return
 }
 
-// newTranslator resolves local-translate mode and prints the transparency
-// notice when it's active.
-func newTranslator(mode, server, stateDir string) *aicli.Translator {
+// newExpander resolves optional local explanation mode and prints its notice.
+func newExpander(mode, stateDir string) *aicli.Translator {
 	switch mode {
 	case "auto", "on", "off":
 	default:
-		log.Fatalf("-local-translate must be auto, on, or off (got %q)", mode)
+		log.Fatalf("-local-explain must be auto, on, or off (got %q)", mode)
 	}
-	t, err := aicli.Detect(mode, server, stateDir)
+	t, err := aicli.Detect(mode, stateDir)
 	if err != nil {
 		log.Fatal(err)
 	}
 	if t != nil {
 		log.Print(t.Notice())
 	} else if mode != "off" {
-		log.Print("local-translate: no AI CLI found on this machine — the server will translate (needs its own API key)")
+		log.Print("local explanation: no AI CLI found — the server can still explain if it has an API key")
 	}
 	return t
 }
 
 func cmdRun(args []string) {
 	fs := flag.NewFlagSet("run", flag.ExitOnError)
-	server, token, device, localTranslate := commonFlags(fs)
+	server, token, device, localExplain := commonFlags(fs)
 	file := fs.String("file", "", "tail a single transcript file instead of running discovery")
 	defaultWatch := strings.Join([]string{
 		filepath.Join(home(), ".claude", "projects"),
@@ -177,8 +180,6 @@ func cmdRun(args []string) {
 	fs.Parse(args)
 
 	shipper := &ship.Shipper{ServerURL: *server, Token: *token, Device: *device}
-	translator := newTranslator(*localTranslate, *server, *stateDir)
-
 	// Single-file mode: the walking-skeleton path, still handy for tests
 	// and "just watch this one file" setups.
 	if *file != "" {
@@ -194,13 +195,6 @@ func cmdRun(args []string) {
 			for _, line := range lines {
 				if m, ok := parser.ParseLine(line); ok {
 					msgs = append(msgs, m)
-				}
-			}
-			if translator != nil {
-				for i := range msgs {
-					if err := translator.Translate(&msgs[i]); err != nil {
-						log.Printf("local translate failed (shipping raw): %v", err)
-					}
 				}
 			}
 			if len(msgs) > 0 {
@@ -234,13 +228,14 @@ func cmdRun(args []string) {
 			roots = append(roots, r)
 		}
 	}
+	expander := newExpander(*localExplain, *stateDir)
 	d, err := daemon.New(daemon.Config{
-		Shipper:    shipper,
-		Translator: translator,
-		WatchRoots: roots,
-		Listen:     *listen,
-		StateDir:   *stateDir,
-		Interval:   *interval,
+		Shipper:          shipper,
+		Expander:         expander,
+		WatchRoots:       roots,
+		Listen:           *listen,
+		StateDir:         *stateDir,
+		Interval:         *interval,
 		BackfillExisting: *backfill,
 	})
 	if err != nil {
@@ -295,7 +290,7 @@ func cmdHook(args []string) {
 // fallback per the spec.
 func cmdReplay(args []string) {
 	fs := flag.NewFlagSet("replay", flag.ExitOnError)
-	server, token, device, localTranslate := commonFlags(fs)
+	server, token, device, _ := commonFlags(fs)
 	delay := fs.Duration("delay", 2*time.Second, "pause between messages")
 	// Accept "replay <fixture> [flags]" — stdlib flag parsing stops at the
 	// first positional arg, so pull the path out before parsing flags.
@@ -313,7 +308,6 @@ func cmdReplay(args []string) {
 
 	parser := parse.ForPath(fixture)
 	shipper := &ship.Shipper{ServerURL: *server, Token: *token, Device: *device}
-	translator := newTranslator(*localTranslate, *server, filepath.Join(stateHome(), "unjargond"))
 	tailer := tail.New(fixture)
 	lines, err := tailer.Poll()
 	if err != nil {
@@ -325,11 +319,6 @@ func cmdReplay(args []string) {
 		m, ok := parser.ParseLine(line)
 		if !ok {
 			continue
-		}
-		if translator != nil {
-			if err := translator.Translate(&m); err != nil {
-				log.Printf("local translate failed (shipping raw): %v", err)
-			}
 		}
 		if sent > 0 {
 			time.Sleep(*delay)

@@ -1,4 +1,4 @@
-import { and, countDistinct, eq } from "drizzle-orm";
+import { and, countDistinct, eq, isNull, ne } from "drizzle-orm";
 import { db, tables } from "@/db";
 import { requireUser } from "@/lib/auth";
 
@@ -37,7 +37,7 @@ export async function GET(req: Request) {
     )
     .innerJoin(tables.devices, eq(tables.sessions.deviceId, tables.devices.id))
     .leftJoin(tables.userTerms, and(eq(tables.userTerms.termId, tables.terms.id), eq(tables.userTerms.userId, user.id)))
-    .where(eq(tables.devices.userId, user.id))
+    .where(and(eq(tables.devices.userId, user.id), isNull(tables.terms.userId), ne(tables.terms.kind, "keyword")))
     .groupBy(tables.terms.id, tables.userTerms.l3);
 
   rows.sort(

@@ -24,8 +24,9 @@ mirror on your own github.io domain. Collectors point at the backend either way.
 1. Click the button (sign in to https://render.com with GitHub — the free
    tier needs no card) and approve the blueprint; `render.yaml` provisions
    the `unjargon` web service from this repo's `Dockerfile` on the free plan
-   with a generated `INGEST_TOKEN` (visible in the service's Environment tab
-   — collectors present it).
+   with Google login and per-device pairing. There is no shared `INGEST_TOKEN`:
+   each collector exchanges a short-lived browser pairing code for its own
+   device credential.
 2. When the first deploy finishes, copy the service URL
    (`https://unjargon-<hash>.onrender.com`).
 3. Point the frontend at it: paste the URL into the connect field on the
@@ -41,30 +42,27 @@ the entrypoint switches automatically.
 ## 1b. Backend — Hugging Face Space (Docker SDK now paid; no local git needed)
 
 The `Sync backend to Hugging Face Space` workflow pushes `main` to your
-Space and sets its `INGEST_TOKEN` secret automatically. One-time setup,
-all in browser UIs:
+Space. One-time setup, all in browser UIs:
 
 1. Create the Space: https://huggingface.co/new-space → SDK **Docker**
    (blank template), name it e.g. `unjargon`, CPU basic (free).
 2. Create a Hugging Face **write** token: https://huggingface.co/settings/tokens
 3. In the GitHub repo → Settings → Secrets and variables → Actions, add:
    - secret `HF_TOKEN` — the token from step 2
-   - secret `UNJARGON_INGEST_TOKEN` — any string you invent; collectors
-     must present it to POST /api/ingest
    - variable `HF_SPACE` — `<hf-username>/<space-name>` (e.g. `wei/unjargon`)
 4. Run the sync workflow once (Actions → "Sync backend to Hugging Face
    Space" → Run workflow) — every later push to `main` re-syncs.
-5. Optional Space secret (Space → Settings): `ANTHROPIC_API_KEY` — only a
-   fallback; by default collectors run local-translate mode with the user's
-   own `claude` CLI, so the server needs no key. Or set the variable
-   `UNJARGON_FAKE_TRANSLATOR=1` for the canned offline demo.
+5. Optional Space secret (Space → Settings): `ANTHROPIC_API_KEY` — used only
+   after a user presses an explanation button. Detection and history import
+   are zero-AI. Or set `UNJARGON_FAKE_TRANSLATOR=1` for the canned on-demand
+   explanation demo.
 
 The app serves at `https://<hf-username>-<space-name>.hf.space`.
 
 Point a collector at it:
 
 ```sh
-UNJARGON_TOKEN=<INGEST_TOKEN> ./unjargond replay fixtures/session.jsonl \
+./unjargond replay fixtures/session.jsonl \
   -server https://<hf-user>-unjargon.hf.space
 ```
 
@@ -93,7 +91,7 @@ backend URL at runtime and remembers it per browser.
 ```sh
 # the exact container the Space runs:
 docker build -t unjargon-space .
-docker run -p 7860:7860 -e INGEST_TOKEN=uj_dev_token -e UNJARGON_FAKE_TRANSLATOR=1 unjargon-space
+docker run -p 7860:7860 -e UNJARGON_FAKE_TRANSLATOR=1 unjargon-space
 # → http://localhost:7860/live
 
 # the exact static bundle Pages serves:

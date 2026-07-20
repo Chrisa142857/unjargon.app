@@ -4,10 +4,8 @@ import { deviceForRequest } from "@/lib/auth";
 
 export const dynamic = "force-dynamic";
 
-// Collector-reported import status. Totals, completed counts, and rate come
-// from Postgres itself (the message table is the queue); this endpoint
-// carries only what the server cannot know — whether the device's local AI
-// budget is spent, and until when.
+// Collector-reported optional explanation budget. Detection progress comes
+// from Postgres and never waits for this budget.
 export async function POST(req: Request) {
   const device = await deviceForRequest(req);
   if (!device) return Response.json({ error: "invalid device token" }, { status: 401 });

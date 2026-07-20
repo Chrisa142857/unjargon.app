@@ -3,10 +3,24 @@ import { requireUser } from "@/lib/auth";
 
 export const dynamic = "force-dynamic";
 
-// Lazy expansion for a term card. Default: the shared generic layer (L2)
-// only — no per-user AI spend. Body {level: "grounding"} explicitly requests
-// the in-context L3 (an AI call over the user's own stream); {messageId}
-// grounds it in the exact message the user tapped from.
+// GET is read-only status polling. POST always needs an explicit action;
+// merely opening a detected term must never trigger an AI call.
+export async function GET(
+  req: Request,
+  { params }: { params: Promise<{ id: string }> },
+) {
+  const user = await requireUser(req);
+  if (user instanceof Response) return user;
+  const termId = Number((await params).id);
+  if (!Number.isInteger(termId) || termId <= 0) {
+    return Response.json({ error: "invalid term id" }, { status: 400 });
+  }
+  const result = await expandTerm(termId, user.id);
+  return result
+    ? Response.json(result)
+    : Response.json({ error: "term not found" }, { status: 404 });
+}
+
 export async function POST(
   req: Request,
   { params }: { params: Promise<{ id: string }> },
@@ -20,19 +34,20 @@ export async function POST(
   }
 
   let messageId: number | undefined;
-  let grounding = false;
+  let action: "concept" | "grounding" | undefined;
   try {
     const body = await req.json();
     if (Number.isInteger(body?.messageId)) messageId = body.messageId;
-    grounding = body?.level === "grounding";
+    if (body?.action === "concept" || body?.action === "grounding") action = body.action;
   } catch {
-    // empty body is fine
+    return Response.json({ error: "missing explicit action" }, { status: 400 });
   }
+  if (!action) return Response.json({ error: "missing explicit action" }, { status: 400 });
 
   try {
     const result = await expandTerm(termId, user.id, {
       sourceMessageId: messageId,
-      grounding,
+      action,
     });
     if (!result) {
       return Response.json({ error: "term not found" }, { status: 404 });

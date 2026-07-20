@@ -34,20 +34,20 @@ import (
 )
 
 type Config struct {
-	Shipper    *ship.Shipper
-	Translator *aicli.Translator // nil → server-side translation
-	WatchRoots []string          // directories scanned for **/*.jsonl
-	Listen     string            // hook-notification address, e.g. 127.0.0.1:4577
-	StateDir   string            // offsets, offline queue, pid file
-	Interval   time.Duration     // poll interval
-	BackfillExisting bool         // import transcripts already present at install time
+	Shipper          *ship.Shipper
+	Expander         *aicli.Translator // nil → server-side explicit explanation
+	WatchRoots       []string          // directories scanned for **/*.jsonl
+	Listen           string            // hook-notification address, e.g. 127.0.0.1:4577
+	StateDir         string            // offsets, offline queue, pid file
+	Interval         time.Duration     // poll interval
+	BackfillExisting bool              // import transcripts already present at install time
 }
 
 // tracked pairs a tailer with its per-file parser (formats like Codex carry
 // session metadata only on the first line, so parsers hold per-file state).
 type tracked struct {
-	tailer           *tail.Tailer
-	parser           parse.Parser
+	tailer *tail.Tailer
+	parser parse.Parser
 }
 
 type Daemon struct {
@@ -132,14 +132,12 @@ func (d *Daemon) Run() error {
 				log.Printf("offline queue: flushed %d, %d left (err=%v)", n, d.queue.Len(), err)
 			}
 		case <-workTick.C:
-			// Server-queued work runs in its own goroutine — an AI call can
-			// take a minute and must not stall message tailing.
-			if d.cfg.Translator != nil && d.workBusy.CompareAndSwap(false, true) {
+			// Explicit explanation work runs separately so AI calls never stall
+			// transcript tailing.
+			if d.cfg.Expander != nil && d.workBusy.CompareAndSwap(false, true) {
 				go func() {
 					defer d.workBusy.Store(false)
 					d.expandWork() // a user is actively waiting on these
-					d.translateWork()
-					d.digestWork()
 					d.reportStatus()
 				}()
 			}
@@ -176,7 +174,7 @@ func (d *Daemon) expandWork() {
 			return
 		}
 
-		out, err := d.cfg.Translator.Complete(work.Prompt)
+		out, err := d.cfg.Expander.Complete(work.Prompt)
 		if err != nil {
 			var wait *aicli.ErrBudgetWait
 			if errors.As(err, &wait) {
@@ -210,84 +208,10 @@ func (d *Daemon) expandWork() {
 	}
 }
 
-// translateWork drains the server's persisted, globally chronological queue
-// of untranslated messages (history shipped raw while the budget was spent,
-// or from a device without a local AI CLI) using the user's own AI CLI.
-func (d *Daemon) translateWork() {
-	client := &http.Client{Timeout: 60 * time.Second}
-	for range 10 { // bounded per cycle
-		req, err := http.NewRequest(http.MethodGet, d.cfg.Shipper.ServerURL+"/api/work/translate", nil)
-		if err != nil {
-			return
-		}
-		req.Header.Set("Authorization", "Bearer "+d.cfg.Shipper.Token)
-		resp, err := client.Do(req)
-		if err != nil {
-			return
-		}
-		if resp.StatusCode != http.StatusOK {
-			resp.Body.Close()
-			return
-		}
-		var work struct {
-			Items []struct {
-				ID   int    `json:"id"`
-				Text string `json:"text"`
-			} `json:"items"`
-		}
-		err = json.NewDecoder(io.LimitReader(resp.Body, 4<<20)).Decode(&work)
-		resp.Body.Close()
-		if err != nil || len(work.Items) == 0 {
-			return
-		}
-
-		type result struct {
-			ID          int                `json:"id"`
-			Translation *parse.Translation `json:"translation"`
-		}
-		var results []result
-		stopped := false
-		for _, item := range work.Items {
-			tr, err := d.cfg.Translator.TranslateText(item.Text)
-			if err != nil {
-				var wait *aicli.ErrBudgetWait
-				if errors.As(err, &wait) {
-					log.Printf("translate work: budget spent, resumes %s", wait.Until.Format(time.RFC3339))
-				} else {
-					log.Printf("translate work %d: %v", item.ID, err)
-				}
-				stopped = true // unposted claims expire server-side and are re-served
-				break
-			}
-			results = append(results, result{ID: item.ID, Translation: tr})
-		}
-		if len(results) > 0 {
-			body, _ := json.Marshal(map[string]any{"items": results})
-			post, err := http.NewRequest(http.MethodPost, d.cfg.Shipper.ServerURL+"/api/work/translate", bytes.NewReader(body))
-			if err != nil {
-				return
-			}
-			post.Header.Set("Content-Type", "application/json")
-			post.Header.Set("Authorization", "Bearer "+d.cfg.Shipper.Token)
-			postResp, err := client.Do(post)
-			if err != nil {
-				log.Printf("translate work: deliver failed: %v", err)
-				return
-			}
-			postResp.Body.Close()
-			log.Printf("translate work: delivered %d translation(s)", len(results))
-		}
-		if stopped {
-			return
-		}
-	}
-}
-
-// reportStatus publishes the local AI budget state so /live can show a
-// truthful paused-until and ETA. Totals and completed counts already live
-// server-side (the queue is Postgres), so only budget state ships.
+// reportStatus records optional explanation usage. Detection progress is
+// wholly server-side and never waits on this budget.
 func (d *Daemon) reportStatus() {
-	used, limit, resetAt := d.cfg.Translator.BudgetStatus()
+	used, limit, resetAt := d.cfg.Expander.BudgetStatus()
 	body := map[string]any{"budget_used": used, "budget_limit": limit}
 	if used >= limit && !resetAt.IsZero() {
 		body["paused_until"] = resetAt.UTC().Format(time.RFC3339)
@@ -305,65 +229,6 @@ func (d *Daemon) reportStatus() {
 		return // best-effort; next tick retries
 	}
 	resp.Body.Close()
-}
-
-// digestWork pulls pending digest chunks from the server (created when a
-// session accumulates enough history) and summarizes them with the user's
-// own AI CLI — the digest analogue of local-translate mode. The server
-// serves this work only when it cannot call an LLM itself.
-func (d *Daemon) digestWork() {
-	client := &http.Client{Timeout: 30 * time.Second}
-	for range 5 { // bounded per cycle
-		req, err := http.NewRequest(http.MethodGet, d.cfg.Shipper.ServerURL+"/api/work/digest", nil)
-		if err != nil {
-			return
-		}
-		req.Header.Set("Authorization", "Bearer "+d.cfg.Shipper.Token)
-		resp, err := client.Do(req)
-		if err != nil {
-			return
-		}
-		if resp.StatusCode == http.StatusNoContent {
-			resp.Body.Close()
-			return
-		}
-		var work struct {
-			ID     int    `json:"id"`
-			Prompt string `json:"prompt"`
-		}
-		err = json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&work)
-		resp.Body.Close()
-		if err != nil || work.ID == 0 || work.Prompt == "" {
-			return
-		}
-
-		out, err := d.cfg.Translator.Complete(work.Prompt)
-		if err != nil {
-			log.Printf("digest work %d: AI call failed: %v", work.ID, err)
-			return
-		}
-		summary, err := aicli.ExtractSummary(out)
-		if err != nil {
-			log.Printf("digest work %d: %v", work.ID, err)
-			return
-		}
-		body, _ := json.Marshal(map[string]string{"summary": summary})
-		post, err := http.NewRequest(http.MethodPost,
-			fmt.Sprintf("%s/api/work/digest/%d", d.cfg.Shipper.ServerURL, work.ID),
-			bytes.NewReader(body))
-		if err != nil {
-			return
-		}
-		post.Header.Set("Content-Type", "application/json")
-		post.Header.Set("Authorization", "Bearer "+d.cfg.Shipper.Token)
-		postResp, err := client.Do(post)
-		if err != nil {
-			log.Printf("digest work %d: deliver failed: %v", work.ID, err)
-			return
-		}
-		postResp.Body.Close()
-		log.Printf("digest work %d: summarized and delivered", work.ID)
-	}
 }
 
 // handleNotify is the SessionStart-hook path: `unjargond hook` posts
@@ -415,9 +280,9 @@ func (d *Daemon) scan() {
 // pre-existing files discovered by scan start at their current end so we
 // don't flood the stream with old history.
 func (d *Daemon) track(path string, fromHook bool) {
-	// Never tail our own translation child sessions (local-translate mode
+	// Never tail our own explanation child sessions (local-explain mode
 	// spawns headless AI sessions that write transcripts too) — tailing them
-	// would translate our own translations, forever.
+	// would recurse forever.
 	if aicli.RecursionGuard(path) {
 		return
 	}
@@ -481,20 +346,6 @@ func (d *Daemon) poll() {
 		for _, line := range lines {
 			if m, ok := tr.parser.ParseLine(line); ok {
 				msgs = append(msgs, m)
-			}
-		}
-		if d.cfg.Translator != nil {
-			for i := range msgs {
-				if err := d.cfg.Translator.Translate(&msgs[i]); err != nil {
-					var wait *aicli.ErrBudgetWait
-					if errors.As(err, &wait) {
-						// Budget spent: the rest ships raw immediately; the server
-						// queues it and translateWork drains it chronologically.
-						break
-					}
-					// Ship untranslated; the server queues or falls back.
-					log.Printf("local translate failed (shipping raw): %v", err)
-				}
 			}
 		}
 		if len(msgs) > 0 {

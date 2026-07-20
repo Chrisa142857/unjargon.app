@@ -20,7 +20,6 @@ services:
         value: "7860"
       # Optional overrides (set in the dashboard when wanted):
       # GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, AUTH_SECRET, APP_URL=https://unjargon.onrender.com
-      # ANTHROPIC_API_KEY      — server-side translation fallback (collectors
-      #                          default to local-translate with the user's CLI)
-      # UNJARGON_FAKE_TRANSLATOR=1 — canned offline demo mode
+      # ANTHROPIC_API_KEY      — optional, only for explanation buttons
+      # UNJARGON_FAKE_TRANSLATOR=1 — canned on-demand explanation demo mode
       # DATABASE_URL           — external Postgres (Neon) for durable data

@@ -16,20 +16,16 @@ export type MessageEvent = {
     cwd: string | null;
     ts: string;
     text: string;
-    subtitle: string | null;
   };
 };
 
-// Result of the translation pipeline for one message. subtitle null means
-// passthrough: the message was trivial (skipped) or translation failed —
-// either way the client stops showing "translating" and renders raw text.
-export type TranslationEvent = {
+// Result of the zero-AI detector for one message. The message always stays
+// verbatim; annotations simply make detected terms tappable.
+export type DetectionEvent = {
   userId: number;
-  type: "translation";
+  type: "detection";
   messageId: number;
   sessionId: number;
-  subtitle: string | null;
-  importance: number | null;
   annotations: {
     id: number;
     span: string;
@@ -45,23 +41,7 @@ export type TranslationEvent = {
   }[];
 };
 
-// A rollup card replacing messages [fromMessageId, toMessageId] in the stream.
-export type DigestEvent = {
-  userId: number;
-  type: "digest";
-  digest: {
-    id: number;
-    sessionId: number;
-    fromMessageId: number;
-    toMessageId: number;
-    fromTs: string;
-    toTs: string;
-    messageCount: number;
-    summary: string;
-  };
-};
-
-export type StreamEvent = MessageEvent | TranslationEvent | DigestEvent;
+export type StreamEvent = MessageEvent | DetectionEvent;
 
 const globalForBus = globalThis as unknown as { __unjargonBus?: EventEmitter };
 
