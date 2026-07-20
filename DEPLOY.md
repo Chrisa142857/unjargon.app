@@ -106,7 +106,7 @@ stable per-message dedupe key.
   bound-parameter limit; a `429 Retry-After` pauses a large local backfill and
   retains only the unacknowledged tail for the next daily window.
 - The server accepts up to 4,000 new messages/day by default and detects
-  jargon in up to 750 shared messages/day. Both limits are configurable with
+  jargon in up to 1,000 shared messages/day. Both limits are configurable with
   `D1_DAILY_INGEST_MESSAGES` and `D1_DAILY_DETECTION_MESSAGES`.
 - Work resumes after 00:00 UTC rather than dropping old history. `/live`
   shows the detection pause and calendar windows when the daily detector

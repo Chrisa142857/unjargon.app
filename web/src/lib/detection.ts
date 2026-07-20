@@ -9,8 +9,8 @@ const BATCH_SIZE = 50;
 const L1 = "Detected without AI. Select this term if you want an explanation.";
 export const detectionDailyLimit = (() => {
   // Conservative Free-plan default. Increase only after checking D1 Row Metrics.
-  const value = Number(process.env.D1_DAILY_DETECTION_MESSAGES ?? 750);
-  return Number.isInteger(value) && value > 0 ? value : 750;
+  const value = Number(process.env.D1_DAILY_DETECTION_MESSAGES ?? 1_000);
+  return Number.isInteger(value) && value > 0 ? value : 1_000;
 })();
 
 export function utcDayStart() {

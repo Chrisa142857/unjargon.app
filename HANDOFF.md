@@ -55,7 +55,7 @@ conservative daily import/detection ceilings. Backlog is paused—not skipped—
 the ceiling and resumes after 00:00 UTC via the collector heartbeat. The
 collector honors `Retry-After`, keeps only the unacknowledged tail of a partial
 upload, and reads giant transcript files in 1 MiB pieces. The limits default
-to 4,000 incoming messages and 750 shared detections/day and can be adjusted with
+to 4,000 incoming messages and 1,000 shared detections/day and can be adjusted with
 `D1_DAILY_INGEST_MESSAGES` / `D1_DAILY_DETECTION_MESSAGES`.
 
 For a large history, detection remains zero-AI and chronological. It works in
