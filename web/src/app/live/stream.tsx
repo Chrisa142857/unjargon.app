@@ -297,7 +297,6 @@ export default function LiveStream() {
   const [view, setView] = useState<"board" | "stream">("board");
   const [messages, setMessages] = useState<LiveMessage[]>([]);
   const [terms, setTerms] = useState<LiveTerm[]>([]);
-  const [freshTermIds, setFreshTermIds] = useState<Set<number>>(new Set());
   const knownTermIds = useRef<Set<number>>(new Set());
   const [loaded, setLoaded] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -455,11 +454,6 @@ export default function LiveStream() {
               }));
             return [...prev, ...fresh];
           });
-          setFreshTermIds((prev) => {
-            const next = new Set(prev);
-            for (const t of freshTerms) next.add(t.id);
-            return next;
-          });
         }
         // Existing terms sighted again in this message bubble up the board.
         const sighted = new Set<number>(
@@ -592,7 +586,6 @@ export default function LiveStream() {
               )}
               <ChipBoard
                 terms={terms}
-                freshTermIds={freshTermIds}
                 onExpanded={cacheExpansion}
                 onLearned={markLearned}
               />
@@ -1001,12 +994,10 @@ function AnnotatedOriginal({
 // terms recede to small pills at the end. AI explanation is always opt-in.
 function ChipBoard({
   terms,
-  freshTermIds,
   onExpanded,
   onLearned,
 }: {
   terms: LiveTerm[];
-  freshTermIds: Set<number>;
   onExpanded: (termId: number, l2: string | null, l3: string | null) => void;
   onLearned: (termId: number) => void;
 }) {
@@ -1102,16 +1093,13 @@ function ChipBoard({
   const tile = (t: LiveTerm, hero: boolean) => {
     const c = domainColor(t.domain);
     const isActive = activeTermId === t.id;
-    const fresh = freshTermIds.has(t.id) && !t.learnedAt;
     return (
       <button
         key={t.id}
         onClick={() => setActiveTermId((cur) => (cur === t.id ? null : t.id))}
         className={`rounded-2xl border p-4 text-left transition-all duration-150 hover:-translate-y-0.5 active:translate-y-0 ${
           hero ? "col-span-2" : "col-span-1"
-        } ${fresh ? "animate-[chip-in_0.35s_ease-out]" : ""} ${
-          isActive ? c.tileActive : c.tile
-        }`}
+        } ${isActive ? c.tileActive : c.tile}`}
       >
         <p
           className={`flex items-center gap-1.5 text-[10px] font-medium uppercase tracking-[0.14em] ${c.caption}`}
@@ -1121,9 +1109,6 @@ function ChipBoard({
           <span className="ml-auto shrink-0 font-mono normal-case tracking-normal text-neutral-500">
             {timeOf(t.lastSeenAt)}
           </span>
-          {fresh && (
-            <span className={`inline-block h-2 w-2 shrink-0 animate-pulse rounded-full ${c.dot}`} />
-          )}
         </p>
         <p
           className={`mt-1.5 font-semibold tracking-tight ${c.accent} ${hero ? "text-2xl" : "text-lg"}`}

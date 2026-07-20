@@ -1,6 +1,7 @@
 import { and, countDistinct, eq, isNull, ne } from "drizzle-orm";
 import { db, tables } from "@/db";
 import { requireUser } from "@/lib/auth";
+import { isHighConfidenceTerm } from "@/lib/detect";
 
 export const dynamic = "force-dynamic";
 
@@ -40,10 +41,13 @@ export async function GET(req: Request) {
     .where(and(eq(tables.devices.userId, user.id), isNull(tables.terms.userId), ne(tables.terms.kind, "keyword")))
     .groupBy(tables.terms.id, tables.userTerms.l3);
 
-  rows.sort(
+  const visibleRows = rows.filter((term) =>
+    isHighConfidenceTerm(term.term, term.salience),
+  );
+  visibleRows.sort(
     (a, b) =>
       a.domain.localeCompare(b.domain) || (b.salience ?? 0) - (a.salience ?? 0),
   );
 
-  return Response.json({ terms: rows });
+  return Response.json({ terms: visibleRows });
 }

@@ -1,10 +1,9 @@
-import { and, asc, count, desc, eq, gte, isNull } from "drizzle-orm";
+import { and, asc, count, eq, gte, isNull } from "drizzle-orm";
 import { db, tables } from "@/db";
 import { publish, type DetectionEvent } from "@/lib/bus";
-import { corpusFor, detectJargon } from "@/lib/detect";
+import { detectJargon } from "@/lib/detect";
 
-// Fifty rows amortizes the remote D1 corpus query without increasing the
-// daily Free-plan allowance. Individual SQL statements remain small.
+// Fifty rows bounds D1 work without increasing the daily Free-plan allowance.
 const BATCH_SIZE = 50;
 const L1 = "Detected without AI. Select this term if you want an explanation.";
 export const detectionDailyLimit = (() => {
@@ -102,20 +101,9 @@ async function detectBatch(userId: number) {
     .limit(batchSize);
   if (rows.length === 0) return "done" as const;
 
-  // ponytail: a recent per-user corpus is enough for weirdness scoring. Add
-  // a maintained aggregate only if a large account makes this query visible.
-  const recent = await db
-    .select({ text: tables.messages.text })
-    .from(tables.messages)
-    .innerJoin(tables.sessions, eq(tables.messages.sessionId, tables.sessions.id))
-    .innerJoin(tables.devices, eq(tables.sessions.deviceId, tables.devices.id))
-    .where(eq(tables.devices.userId, userId))
-    .orderBy(desc(tables.messages.id))
-    .limit(1000);
-  const corpus = corpusFor(recent.map((row) => row.text));
   const sharedTerms = new Map<string, SharedTerm>();
   for (const [index, { message }] of rows.entries()) {
-    await storeDetection(message, userId, corpus, sharedTerms, usedToday + index + 1);
+    await storeDetection(message, userId, sharedTerms, usedToday + index + 1);
   }
   if (rows.length >= remaining) return "quota" as const;
   return rows.length === batchSize ? "more" as const : "done" as const;
@@ -133,7 +121,6 @@ type SharedTerm = {
 async function storeDetection(
   message: typeof tables.messages.$inferSelect,
   userId: number,
-  corpus: ReturnType<typeof corpusFor>,
   sharedTerms: Map<string, SharedTerm>,
   dailyDetectionUsed: number,
 ) {
@@ -143,7 +130,7 @@ async function storeDetection(
   const byKey = new Map<string, { id: number; term: string }>();
   const newTerms: DetectionEvent["newTerms"] = [];
 
-  for (const detected of detectJargon(message.text, corpus)) {
+  for (const detected of detectJargon(message.text)) {
     const key = detected.term.toLowerCase();
     let term = sharedTerms.get(key);
     if (!term) {

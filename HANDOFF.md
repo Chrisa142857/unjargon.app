@@ -42,9 +42,10 @@ digests.
    schedules `web/src/lib/detection.ts`.
 3. The detector works oldest-first in bounded server batches, including
    already-uploaded history once `/api/bootstrap` is opened.
-4. `web/src/lib/detect.ts` uses the bundled De-Jargonizer BBC frequency data,
-   acronym rules, code/artifact masking, contextual-word rules, and a simple
-   per-user weirdness score. The source and license are in
+4. `web/src/lib/detect.ts` uses the bundled De-Jargonizer BBC frequency data
+   only to reject ordinary uppercase English, plus high-confidence acronym,
+   code/artifact masking, and curated contextual-word rules. BBC rarity alone
+   is not an automatic chip source; the source and license are in
    `web/data/README.md`.
 5. Detector results upsert only shared generic `term` / `initial` rows,
    create sightings + neutral annotations, set `messages.detected_at` as the
@@ -118,8 +119,9 @@ npm run build
 ```
 
 The detector check asserts that `ODE`, `RK4`, `BDF`, and `stiff` are found
-while the dotted `scipy.integrate.solve_ivp` artifact is excluded. The build
-now uses system fonts, so it does not depend on Google Fonts being reachable.
+while `OK`, `GitHub`, and the dotted `scipy.integrate.solve_ivp` artifact
+are excluded. The build now uses system fonts, so it does not depend on Google
+Fonts being reachable.
 
 Run this before release:
 

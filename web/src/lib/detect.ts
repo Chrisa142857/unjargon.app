@@ -8,13 +8,8 @@ export type DetectedTerm = {
   confidence: number;
 };
 
-type Corpus = { counts: Map<string, number>; words: number };
-
-// De-Jargonizer's published BBC frequency data treats words below 50 uses as
-// jargon. It is only a signal: acronyms and locally unusual words help catch
-// technical vocabulary that a general-news corpus misses.
-const RARE_IN_BBC = 50;
 const MAX_TERMS = 6;
+const COMMON_IN_BBC = 1_000;
 
 const STOP_WORDS = new Set([
   "about", "after", "already", "also", "around", "before", "because",
@@ -53,7 +48,6 @@ const COMMANDS = [
 ].join("|");
 
 let frequency: Map<string, number> | undefined;
-let bbcWordCount = 0;
 
 function frequencies() {
   if (frequency) return frequency;
@@ -67,7 +61,6 @@ function frequencies() {
     const count = Number(row.slice(comma + 1));
     if (word && Number.isFinite(count)) {
       frequency.set(word, count);
-      bbcWordCount += count;
     }
   }
   return frequency;
@@ -92,31 +85,14 @@ function isAcronym(token: string) {
   return /^[A-Z]{2,}\d*$/.test(token) || /^[A-Z][a-z]+[A-Z]\d*$/.test(token);
 }
 
-function usableWord(token: string) {
-  const lower = token.toLowerCase();
-  return (
-    token.length >= 3 &&
-    !STOP_WORDS.has(lower) &&
-    !/\d/.test(token) &&
-    !/^[A-Z][a-z]+$/.test(token)
-  );
+function isTechnicalInitial(token: string) {
+  // De-Jargonizer's BBC data rejects ordinary uppercase English (for example,
+  // "OK"); rarity alone is not enough to create a glossary meaning.
+  return token.length >= 3 && isAcronym(token) &&
+    (frequencies().get(token.toLowerCase()) ?? 0) < COMMON_IN_BBC;
 }
 
-export function corpusFor(texts: string[]): Corpus {
-  const counts = new Map<string, number>();
-  let words = 0;
-  for (const text of texts) {
-    for (const token of proseOnly(text).match(/[A-Za-z][A-Za-z0-9-]*/g) ?? []) {
-      const key = token.toLowerCase();
-      counts.set(key, (counts.get(key) ?? 0) + 1);
-      words++;
-    }
-  }
-  return { counts, words };
-}
-
-export function detectJargon(text: string, corpus: Corpus = corpusFor([text])): DetectedTerm[] {
-  const counts = frequencies();
+export function detectJargon(text: string): DetectedTerm[] {
   const candidates = new Map<string, DetectedTerm & { index: number }>();
   const tokens = proseOnly(text).match(/[A-Za-z][A-Za-z0-9-]*/g) ?? [];
   const add = (term: string, kind: DetectedTerm["kind"], confidence: number, index: number) => {
@@ -130,13 +106,10 @@ export function detectJargon(text: string, corpus: Corpus = corpusFor([text])): 
   for (let index = 0; index < tokens.length; index++) {
     const token = tokens[index];
     const lower = token.toLowerCase();
-    const count = counts.get(lower) ?? 0;
     if (TECHNICAL_PROPER_NOUNS.has(lower)) {
       add(token, "term", 0.8, index);
-    } else if (isAcronym(token) && !STOP_WORDS.has(lower)) {
+    } else if (isTechnicalInitial(token) && !STOP_WORDS.has(lower)) {
       add(token, "initial", 0.95, index);
-    } else if (usableWord(token) && count < RARE_IN_BBC && !lower.endsWith("ly")) {
-      add(token, "term", count === 0 ? 0.78 : 0.72, index);
     }
   }
 
@@ -146,17 +119,6 @@ export function detectJargon(text: string, corpus: Corpus = corpusFor([text])): 
     const lower = token.toLowerCase();
     if (hasTechnicalSignal && CONTEXTUAL_TERMS.has(lower)) {
       add(token, "term", 0.6, index);
-      continue;
-    }
-    // Weirdness score: a normally familiar word that appears unusually often
-    // in this user's messages is likely being used as field-specific jargon.
-    const local = corpus.counts.get(lower) ?? 0;
-    const general = counts.get(lower) ?? 0;
-    const surprise = corpus.words > 0 && general > 0
-      ? (local / corpus.words) / (general / bbcWordCount)
-      : 0;
-    if (usableWord(token) && local >= 2 && general >= RARE_IN_BBC && surprise >= 20) {
-      add(token, "term", 0.5, index);
     }
   }
 
@@ -164,4 +126,12 @@ export function detectJargon(text: string, corpus: Corpus = corpusFor([text])): 
     .sort((a, b) => b.confidence - a.confidence || a.index - b.index)
     .slice(0, MAX_TERMS)
     .map(({ term, kind, confidence }) => ({ term, kind, confidence }));
+}
+
+// Existing detector rows stay in D1 through upgrades. Reapply the current
+// precision rule when rendering them instead of showing legacy rare-word chips.
+export function isHighConfidenceTerm(term: string, salience: number | null) {
+  if (salience === 0.6) return true; // contextual term, validated in its message
+  const key = term.toLowerCase();
+  return detectJargon(term).some((detected) => detected.term.toLowerCase() === key);
 }

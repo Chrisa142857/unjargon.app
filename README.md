@@ -23,13 +23,17 @@ identifiers are intentionally not treated as jargon.
 
 History import and jargon detection make **zero AI calls**. The server uses:
 
-1. the published De-Jargonizer BBC word-frequency data;
-2. acronym and artifact-shape rules; and
-3. a small per-user weirdness score for words unusually common in one corpus.
+1. the published De-Jargonizer BBC word-frequency data to reject ordinary
+   uppercase English;
+2. high-confidence technical initialisms and curated technical/contextual
+   vocabulary; and
+3. artifact-shape rules that ignore paths, flags, commands, packages, and
+   identifiers.
 
 The dataset is bundled in `web/data/`; its source and license are recorded in
-[`web/data/README.md`](web/data/README.md). This is deliberately a lightweight
-Build Week heuristic, not a claim of perfect context-aware classification.
+[`web/data/README.md`](web/data/README.md). Rare-word frequency is not used as
+an automatic chip source: it measures unfamiliarity, not whether a word has a
+distinct glossary meaning.
 
 When a user taps **“explain what this means · 1 AI call”** or **“explain in my
 sessions · 1 AI call”**, unjargon uses server AI only when both

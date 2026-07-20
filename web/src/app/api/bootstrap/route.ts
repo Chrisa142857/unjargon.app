@@ -1,6 +1,7 @@
 import { and, count, countDistinct, desc, eq, gte, inArray, isNull, max, min, ne, sql } from "drizzle-orm";
 import { db, tables } from "@/db";
 import { requireUser } from "@/lib/auth";
+import { isHighConfidenceTerm } from "@/lib/detect";
 import { detectionDailyLimit, scheduleDetection, utcDayStart } from "@/lib/detection";
 
 export const dynamic = "force-dynamic";
@@ -86,21 +87,6 @@ export async function GET(req: Request) {
             ne(tables.terms.kind, "keyword"),
           ))
       : [];
-  const annotationsByMessage = new Map<
-    number,
-    { id: number; span: string; sentenceRewrite: string; termId: number | null }[]
-  >();
-  for (const a of annotationRows) {
-    const list = annotationsByMessage.get(a.messageId) ?? [];
-    list.push({
-      id: a.id,
-      span: a.span,
-      sentenceRewrite: a.sentenceRewrite,
-      termId: a.termId,
-    });
-    annotationsByMessage.set(a.messageId, list);
-  }
-
   // Terms with recency (latest sighting) — the chip board sorts by it.
   const termRows = await db
     .select({
@@ -130,11 +116,30 @@ export async function GET(req: Request) {
     .leftJoin(tables.userTerms, and(eq(tables.userTerms.termId, tables.terms.id), eq(tables.userTerms.userId, user.id)))
     .where(and(eq(tables.devices.userId, user.id), isNull(tables.terms.userId), ne(tables.terms.kind, "keyword")))
     .groupBy(tables.terms.id, tables.userTerms.l3, tables.userTerms.learnedAt);
+  const visibleTermRows = termRows.filter((term) =>
+    isHighConfidenceTerm(term.term, term.salience),
+  );
+  const visibleTermIds = new Set(visibleTermRows.map((term) => term.id));
+  const annotationsByMessage = new Map<
+    number,
+    { id: number; span: string; sentenceRewrite: string; termId: number | null }[]
+  >();
+  for (const a of annotationRows) {
+    if (a.termId === null || !visibleTermIds.has(a.termId)) continue;
+    const list = annotationsByMessage.get(a.messageId) ?? [];
+    list.push({
+      id: a.id,
+      span: a.span,
+      sentenceRewrite: a.sentenceRewrite,
+      termId: a.termId,
+    });
+    annotationsByMessage.set(a.messageId, list);
+  }
 
   return Response.json({
     calibration: user.calibration,
     progress: progressPayload,
-    terms: termRows.map((t) => ({
+    terms: visibleTermRows.map((t) => ({
       id: t.id,
       term: t.term,
       domain: t.domain,
