@@ -77,6 +77,27 @@ Claude Code / Codex → unjargond → HTTPS → Render (Next.js + SSE)
   Google login, pairing, and opt-in explanation queue.
 - `install.sh` — macOS/Linux installer for the collector service.
 
+## Built with Codex + GPT-5.6 Terra
+
+unjargon was built during OpenAI Build Week with Codex using GPT-5.6 Terra.
+The primary build session is `019f717b-b276-7660-9d7a-d3419838978e`.
+
+Codex accelerated the work by helping turn the product from a transcript
+collector into a privacy-conscious, zero-AI jargon tool: it implemented and
+tested the Claude Code/Codex parsers, tightened the detector so code-shaped
+text is not treated as jargon, wired the Render + Cloudflare D1 deployment,
+and repeatedly verified the public app and installer end to end. Key product
+decisions were to make history import and detection free of AI calls, make
+public references the default explanation, and require a clear confirmation
+before a user spends any AI credit for an in-context explanation.
+
+The collaboration was deliberately iterative. The builder found the early
+medium- and high-effort passes unsatisfactory, then requested ultra-effort
+execution for most remaining work; those later passes completed the requested
+implementation, debugging, deployment, and verification tasks. Codex and
+GPT-5.6 Terra were used to build and validate the project, while unjargon's
+runtime detector intentionally remains zero-AI by default.
+
 ## Development
 
 ```sh
