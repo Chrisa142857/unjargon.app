@@ -58,6 +58,7 @@ type ImportProgress = {
 
 const INSTALL_COMMAND =
   "curl -fsSL https://raw.githubusercontent.com/Chrisa142857/unjargon.app/main/install.sh | sh -s -- --server https://unjargon.onrender.com";
+const UNINSTALL_COMMAND = `${INSTALL_COMMAND} --uninstall`;
 const MAX_VISIBLE_MESSAGES = 200;
 
 // Every domain gets a stable color identity — chips are the product surface,
@@ -192,7 +193,7 @@ const CALIBRATION_LABELS: [Calibration, string][] = [
   ["expert", "expert"],
 ];
 
-function InstallCollectorCallout() {
+function InstallCollectorCallout({ onClose }: { onClose?: () => void }) {
   const [pairingCode, setPairingCode] = useState<string | null>(null);
   const [pairingError, setPairingError] = useState<string | null>(null);
 
@@ -216,10 +217,11 @@ function InstallCollectorCallout() {
       <button onClick={createPairingCode} className="mt-4 rounded-md bg-amber-200 px-4 py-2 text-sm font-medium text-neutral-950 hover:bg-amber-100">
         {pairingCode ? "Make a new pairing code" : "Create pairing code"}
       </button>
+      {onClose && <button onClick={onClose} className="ml-3 text-sm text-neutral-400 hover:text-neutral-200">close</button>}
       {pairingCode && <p className="mt-3 text-sm text-amber-100">Pairing code: <code className="select-all font-semibold">{pairingCode}</code> <span className="text-neutral-400">(expires in 10 minutes)</span></p>}
       {pairingError && <p className="mt-3 text-sm text-rose-300">{pairingError}</p>}
       <p className="mt-6 text-xs text-neutral-500">To remove the collector from a machine later (its local queue and logs are deleted; transcripts are not):</p>
-      <code className="mt-2 block overflow-x-auto rounded-lg border border-white/[0.08] bg-neutral-950 px-4 py-3 text-left text-xs text-neutral-200">{INSTALL_COMMAND} --uninstall</code>
+      <code className="mt-2 block overflow-x-auto rounded-lg border border-white/[0.08] bg-neutral-950 px-4 py-3 text-left text-xs text-neutral-200">{UNINSTALL_COMMAND}</code>
     </div>
   );
 }
@@ -1242,11 +1244,13 @@ export default function LiveStream() {
   const [progress, setProgress] = useState<ImportProgress>({ messages: 0, detected: 0, ratePerHour: 0, dailyDetectionLimit: 0, dailyDetectionUsed: 0, sessions: 0, firstMessageAt: null, lastMessageAt: null, lastImportedAt: null });
   const [loaded, setLoaded] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [showPairing, setShowPairing] = useState(false);
+  const [showUninstall, setShowUninstall] = useState(false);
 
   useEffect(() => {
     if (bounceToApiOrigin("/live")) return;
     let cancelled = false;
-    (async () => {
+    async function refresh() {
       try {
         const suffix = selectedDeviceId === null ? "" : `?device=${selectedDeviceId}`;
         const res = await fetch(api(`/api/bootstrap${suffix}`));
@@ -1257,14 +1261,17 @@ export default function LiveStream() {
         setDevices(data.devices);
         setTerms(data.terms);
         setProgress(data.progress);
+        setLoadError(null);
         if (selectedDeviceId === null && data.selectedDeviceId !== null) setSelectedDeviceId(data.selectedDeviceId);
       } catch (err) {
         if (!cancelled) setLoadError(String(err));
       } finally {
         if (!cancelled) setLoaded(true);
       }
-    })();
-    return () => { cancelled = true; };
+    }
+    refresh();
+    const timer = window.setInterval(refresh, 5000);
+    return () => { cancelled = true; window.clearInterval(timer); };
   }, [selectedDeviceId]);
 
   function cacheExpansion(termId: number, l3: string | null) {
@@ -1277,28 +1284,21 @@ export default function LiveStream() {
     fetch(api(`/api/terms/${termId}/learned`), { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ learned }) }).catch(() => {});
   }
 
-  async function unpair() {
-    const device = devices.find((item) => item.id === selectedDeviceId);
-    if (!device || !window.confirm(`Unpair ${device.name} from unjargon? This revokes its server pairing and stops future uploads. It does not uninstall the collector on ${device.name}; run the displayed uninstall command on that machine. Its term history stays in wiki.`)) return;
-    const res = await fetch(api(`/api/devices/${device.id}/unpair`), { method: "POST" });
-    if (!res.ok) return setLoadError("Could not unpair this machine. Please try again.");
-    setDevices((current) => current.filter((item) => item.id !== device.id));
-    setTerms([]);
-    setSelectedDeviceId(null);
-  }
-
   return (
     <main className="relative flex min-h-dvh flex-col bg-neutral-950 text-neutral-100">
       <header className="relative z-10 flex flex-wrap items-center gap-2 border-b border-white/[0.06] bg-neutral-950/80 px-4 py-3 text-sm backdrop-blur">
         <span className="font-semibold tracking-tight">unjargon</span>
         <span className="text-xs text-neutral-500">terms on one machine</span>
         {devices.length > 0 && <select value={selectedDeviceId ?? ""} onChange={(event) => setSelectedDeviceId(Number(event.target.value))} aria-label="selected machine" className="ml-auto rounded-md border border-neutral-700 bg-neutral-950 px-2 py-1 text-xs text-neutral-300">{devices.map((device) => <option key={device.id} value={device.id}>{device.name}</option>)}</select>}
+        {devices.length > 0 && <button onClick={() => setShowPairing(true)} className="text-xs text-amber-200 hover:text-amber-100">Pair a new machine</button>}
         <Link href="/wiki" className="rounded-md border border-neutral-700 px-2 py-1 text-xs text-neutral-400 hover:text-neutral-100">all-machine wiki</Link>
-        <button onClick={unpair} disabled={devices.length === 0} title="Revokes this machine's server pairing only; it does not uninstall its local collector." className="text-xs text-rose-300 hover:text-rose-200 disabled:hidden">Unpair</button>
+        <button onClick={() => setShowUninstall((shown) => !shown)} className="text-xs text-rose-300 hover:text-rose-200">Uninstall</button>
         <AccountMenu />
       </header>
       <div className="relative z-10 flex-1 px-4 py-6">
         <div className="mx-auto max-w-2xl">
+          {showPairing && <InstallCollectorCallout onClose={() => setShowPairing(false)} />}
+          {showUninstall && <section className="mb-5 rounded-lg border border-rose-300/20 bg-rose-300/[0.04] px-4 py-3 text-sm text-neutral-300"><p>Run this on the machine you want to remove. It stops and removes the local collector, service, queue, logs, and Claude hook; transcripts and wiki history stay intact.</p><code className="mt-3 block overflow-x-auto rounded bg-neutral-950 px-3 py-2 text-xs text-neutral-100">{UNINSTALL_COMMAND}</code></section>}
           <ImportProgressCard progress={progress} />
           {terms.length === 0 && <div className="text-center text-neutral-500">{!loaded ? "loading…" : loadError ? <><p>couldn&apos;t reach the unjargon API — {loadError}</p><BackendPrompt /></> : devices.length === 0 ? <InstallCollectorCallout /> : "No terms yet — unjargon is checking this machine's history."}</div>}
           <ChipBoard terms={terms} onExpanded={cacheExpansion} onLearned={markLearned} />
