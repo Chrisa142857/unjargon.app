@@ -26,7 +26,7 @@ History import and jargon detection make **zero AI calls**. The server uses:
 
 1. the published De-Jargonizer BBC word-frequency data to reject ordinary
    uppercase English;
-2. high-confidence technical initialisms and curated technical/contextual
+2. high-confidence technical acronyms and curated technical/contextual
    vocabulary; and
 3. artifact-shape rules that ignore paths, flags, commands, packages, and
    identifiers.

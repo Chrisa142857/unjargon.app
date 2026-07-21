@@ -1057,7 +1057,7 @@ function ChipBoard({
 
   const KIND_LABELS: ["term" | "initial", string][] = [
     ["term", "terms"],
-    ["initial", "initials"],
+    ["initial", "acronyms"],
   ];
 
   const kindBar = (
@@ -1143,7 +1143,7 @@ function ChipBoard({
         {kindBar}
         {timeRows.length === 0 && (
           <p className="py-10 text-center text-sm text-neutral-500">
-            no {kindFilter}s yet.
+            no {kindFilter === "initial" ? "acronyms" : "terms"} yet.
           </p>
         )}
         <div className="grid grid-cols-2 gap-3">
