@@ -2,7 +2,6 @@ import { and, count, eq, gte } from "drizzle-orm";
 import { createHash } from "node:crypto";
 import { db, tables } from "@/db";
 import { deviceForRequest } from "@/lib/auth";
-import { publish } from "@/lib/bus";
 import { scheduleDetection } from "@/lib/detection";
 
 export const dynamic = "force-dynamic";
@@ -92,7 +91,6 @@ export async function POST(req: Request) {
     })
     .onConflictDoNothing()
     .returning();
-  const sessionCreated = !!session;
   if (!session) {
     [session] = await db
       .select()
@@ -121,23 +119,6 @@ export async function POST(req: Request) {
       .onConflictDoNothing()
       .returning();
     stored.push(...rows);
-  }
-
-  for (const [index, row] of stored.entries()) {
-    publish({
-      userId,
-      type: "message",
-      message: {
-        id: row.id,
-        sessionId: row.sessionId,
-        sessionCreated: sessionCreated && index === 0,
-        device: device.name,
-        tool: session.tool,
-        cwd: session.cwd,
-        ts: row.ts.toISOString(),
-        text: row.text,
-      },
-    });
   }
 
   // Deliberately ignore any `translation` field sent by an older collector.

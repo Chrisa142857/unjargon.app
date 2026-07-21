@@ -1,4 +1,4 @@
-import { and, asc, count, eq, gte, isNull, ne, sql } from "drizzle-orm";
+import { and, asc, count, eq, gte, isNotNull, isNull, ne, sql } from "drizzle-orm";
 import { db, tables } from "@/db";
 import { publish, type DetectionEvent } from "@/lib/bus";
 import { detectJargon } from "@/lib/detect";
@@ -98,7 +98,9 @@ async function detectBatch(userId: number) {
     .from(tables.messages)
     .innerJoin(tables.sessions, eq(tables.messages.sessionId, tables.sessions.id))
     .innerJoin(tables.devices, eq(tables.sessions.deviceId, tables.devices.id))
-    .where(and(eq(tables.devices.userId, userId), isNull(tables.messages.detectedAt)))
+    // Unpaired machines retain their glossary in /wiki, but their uploaded
+    // backlog must never keep consuming work after the user revokes them.
+    .where(and(eq(tables.devices.userId, userId), isNotNull(tables.devices.tokenHash), isNull(tables.messages.detectedAt)))
     .orderBy(asc(tables.messages.ts), asc(tables.messages.id))
     .limit(batchSize);
   if (rows.length === 0) return "done" as const;

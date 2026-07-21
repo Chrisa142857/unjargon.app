@@ -40,6 +40,10 @@ export type LiveMessage = {
   annotations: LiveAnnotation[];
 };
 
+type LegacyStreamEvent =
+  | { type: "message"; message: Omit<LiveMessage, "detected" | "annotations"> & { sessionCreated: boolean } }
+  | ClientStreamEvent;
+
 type ImportProgress = {
   messages: number;
   detected: number;
@@ -214,6 +218,8 @@ function InstallCollectorCallout() {
       </button>
       {pairingCode && <p className="mt-3 text-sm text-amber-100">Pairing code: <code className="select-all font-semibold">{pairingCode}</code> <span className="text-neutral-400">(expires in 10 minutes)</span></p>}
       {pairingError && <p className="mt-3 text-sm text-rose-300">{pairingError}</p>}
+      <p className="mt-6 text-xs text-neutral-500">To remove the collector from a machine later (its local queue and logs are deleted; transcripts are not):</p>
+      <code className="mt-2 block overflow-x-auto rounded-lg border border-white/[0.08] bg-neutral-950 px-4 py-3 text-left text-xs text-neutral-200">{INSTALL_COMMAND} --uninstall</code>
     </div>
   );
 }
@@ -263,7 +269,7 @@ function ImportProgressCard({ progress }: { progress: ImportProgress }) {
   } else if (eta) {
     status = `${eta} until jargon detection finishes, at the current pace.`;
   } else {
-    status = "Finding jargon in your history — raw messages are already browsable.";
+    status = "Finding jargon in your history.";
   }
 
   return (
@@ -295,7 +301,8 @@ function ImportProgressCard({ progress }: { progress: ImportProgress }) {
 // strip shows the latest agent activity; the raw stream is secondary.
 // Data comes from GET /api/bootstrap + the SSE stream, all client-side, so
 // the static GitHub Pages build works against a remote API.
-export default function LiveStream() {
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+function LegacyLiveStream() {
   const [view, setView] = useState<"board" | "stream">("board");
   const [messages, setMessages] = useState<LiveMessage[]>([]);
   const [terms, setTerms] = useState<LiveTerm[]>([]);
@@ -390,7 +397,7 @@ export default function LiveStream() {
     es.onopen = () => setConnected(true);
     es.onerror = () => setConnected(false);
     es.onmessage = (e) => {
-      const event: ClientStreamEvent = JSON.parse(e.data);
+      const event: LegacyStreamEvent = JSON.parse(e.data);
       if (event.type === "message") {
         const m: LiveMessage = {
           ...event.message,
@@ -1282,5 +1289,81 @@ function BackendPrompt() {
         connect
       </button>
     </form>
+  );
+}
+
+type PairedDevice = { id: number; name: string; lastSeenAt: string };
+
+// The live surface is intentionally a single-machine glossary. It never
+// receives raw agent messages; /wiki is the all-machine term history.
+export default function LiveStream() {
+  const [devices, setDevices] = useState<PairedDevice[]>([]);
+  const [selectedDeviceId, setSelectedDeviceId] = useState<number | null>(null);
+  const [terms, setTerms] = useState<LiveTerm[]>([]);
+  const [progress, setProgress] = useState<ImportProgress>({ messages: 0, detected: 0, ratePerHour: 0, dailyDetectionLimit: 0, dailyDetectionUsed: 0, sessions: 0, firstMessageAt: null, lastMessageAt: null, lastImportedAt: null });
+  const [loaded, setLoaded] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (bounceToApiOrigin("/live")) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const suffix = selectedDeviceId === null ? "" : `?device=${selectedDeviceId}`;
+        const res = await fetch(api(`/api/bootstrap${suffix}`));
+        if (res.status === 401) return window.location.assign(api("/api/auth/google"));
+        if (!res.ok) throw new Error(`bootstrap failed (${res.status})`);
+        const data = await res.json();
+        if (cancelled) return;
+        setDevices(data.devices);
+        setTerms(data.terms);
+        setProgress(data.progress);
+        if (selectedDeviceId === null && data.selectedDeviceId !== null) setSelectedDeviceId(data.selectedDeviceId);
+      } catch (err) {
+        if (!cancelled) setLoadError(String(err));
+      } finally {
+        if (!cancelled) setLoaded(true);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [selectedDeviceId]);
+
+  function cacheExpansion(termId: number, l3: string | null) {
+    setTerms((current) => current.map((term) => term.id === termId ? { ...term, l3: l3 ?? term.l3 } : term));
+  }
+
+  function markLearned(termId: number) {
+    setTerms((current) => current.map((term) => term.id === termId && !term.learnedAt ? { ...term, learnedAt: new Date().toISOString() } : term));
+    fetch(api(`/api/terms/${termId}/learned`), { method: "POST" }).catch(() => {});
+  }
+
+  async function unpair() {
+    const device = devices.find((item) => item.id === selectedDeviceId);
+    if (!device || !window.confirm(`Unpair ${device.name}? This stops uploads from that machine. Its term history stays in wiki.`)) return;
+    const res = await fetch(api(`/api/devices/${device.id}/unpair`), { method: "POST" });
+    if (!res.ok) return setLoadError("Could not unpair this machine. Please try again.");
+    setDevices((current) => current.filter((item) => item.id !== device.id));
+    setTerms([]);
+    setSelectedDeviceId(null);
+  }
+
+  return (
+    <main className="relative flex min-h-dvh flex-col bg-neutral-950 text-neutral-100">
+      <header className="relative z-10 flex flex-wrap items-center gap-2 border-b border-white/[0.06] bg-neutral-950/80 px-4 py-3 text-sm backdrop-blur">
+        <span className="font-semibold tracking-tight">unjargon</span>
+        <span className="text-xs text-neutral-500">terms on one machine</span>
+        {devices.length > 0 && <select value={selectedDeviceId ?? ""} onChange={(event) => setSelectedDeviceId(Number(event.target.value))} aria-label="selected machine" className="ml-auto rounded-md border border-neutral-700 bg-neutral-950 px-2 py-1 text-xs text-neutral-300">{devices.map((device) => <option key={device.id} value={device.id}>{device.name}</option>)}</select>}
+        <Link href="/wiki" className="rounded-md border border-neutral-700 px-2 py-1 text-xs text-neutral-400 hover:text-neutral-100">all-machine wiki</Link>
+        <AccountMenu />
+      </header>
+      <div className="relative z-10 flex-1 px-4 py-6">
+        <div className="mx-auto max-w-2xl">
+          {devices.length > 0 && <div className="mb-5 flex flex-wrap items-center gap-3 rounded-lg border border-neutral-800 bg-neutral-900/50 px-3 py-2 text-xs text-neutral-400"><button onClick={unpair} className="text-rose-300 hover:text-rose-200">Unpair this machine</button><span>Unpairing keeps its glossary history in wiki.</span></div>}
+          <ImportProgressCard progress={progress} />
+          {terms.length === 0 && <div className="text-center text-neutral-500">{!loaded ? "loading…" : loadError ? <><p>couldn&apos;t reach the unjargon API — {loadError}</p><BackendPrompt /></> : devices.length === 0 ? <InstallCollectorCallout /> : "No terms yet — unjargon is checking this machine's history."}</div>}
+          <ChipBoard terms={terms} onExpanded={cacheExpansion} onLearned={markLearned} />
+        </div>
+      </div>
+    </main>
   );
 }

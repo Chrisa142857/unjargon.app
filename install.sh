@@ -10,6 +10,7 @@
 #   --binary PATH   use a locally built unjargond instead of downloading
 #   --no-service    install binary + config only, don't register a service
 #   --reimport      intentionally re-send existing transcript history once
+#   --uninstall      remove this machine's collector, queue, and service
 set -eu
 
 PAIR_CODE=""
@@ -17,6 +18,7 @@ SERVER="https://unjargon.onrender.com"
 BINARY=""
 SERVICE=1
 REIMPORT=0
+UNINSTALL=0
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -25,9 +27,51 @@ while [ $# -gt 0 ]; do
     --binary)  BINARY="$2"; shift 2 ;;
     --no-service) SERVICE=0; shift ;;
     --reimport) REIMPORT=1; shift ;;
+    --uninstall) UNINSTALL=1; shift ;;
     *) echo "unknown flag: $1" >&2; exit 2 ;;
   esac
 done
+
+if [ "$UNINSTALL" -eq 1 ]; then
+  OS=$(uname -s | tr '[:upper:]' '[:lower:]')
+  BIN_DIR="$HOME/.local/bin"
+  BIN="$BIN_DIR/unjargond"
+  CONF_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/unjargond"
+  STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/unjargond"
+  if [ "$OS" = darwin ]; then
+    PLIST="$HOME/Library/LaunchAgents/app.unjargon.unjargond.plist"
+    launchctl bootout "gui/$(id -u)" "$PLIST" 2>/dev/null || launchctl unload "$PLIST" 2>/dev/null || true
+    rm -f "$PLIST"
+  elif command -v systemctl >/dev/null 2>&1; then
+    systemctl --user disable --now unjargond.service 2>/dev/null || true
+    rm -f "${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user/unjargond.service"
+    systemctl --user daemon-reload 2>/dev/null || true
+  fi
+  if [ -r "$STATE_DIR/unjargond.pid" ]; then
+    kill "$(cat "$STATE_DIR/unjargond.pid")" 2>/dev/null || true
+  fi
+  if command -v python3 >/dev/null 2>&1; then
+    python3 - <<'PYEOF'
+import json, os
+path = os.path.join(os.environ.get("CLAUDE_CONFIG_DIR") or os.path.expanduser("~/.claude"), "settings.json")
+try:
+    with open(path) as f: cfg = json.load(f)
+except (FileNotFoundError, json.JSONDecodeError):
+    cfg = None
+if cfg:
+    root = cfg.get("hooks")
+    if isinstance(root, dict):
+        hooks = root.get("SessionStart", [])
+        root["SessionStart"] = [e for e in hooks if not any("unjargond" in h.get("command", "") for h in e.get("hooks", []))]
+        with open(path, "w") as f: json.dump(cfg, f, indent=2); f.write("\n")
+PYEOF
+  fi
+  rm -f "$BIN" "$CONF_DIR/env"
+  rm -rf "$STATE_DIR"
+  rmdir "$CONF_DIR" 2>/dev/null || true
+  echo "uninstalled unjargond from this machine (local queue and logs removed; Claude/Codex transcripts untouched)"
+  exit 0
+fi
 
 if [ -z "$PAIR_CODE" ]; then
   if [ -r /dev/tty ]; then

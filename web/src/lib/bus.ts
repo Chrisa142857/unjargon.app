@@ -1,19 +1,6 @@
 import { EventEmitter } from "node:events";
 
-// In-process pub/sub connecting /api/ingest (publisher) to /api/stream (SSE
-// subscribers). Works because the app runs as a single Node process. If this
-// service is ever scaled horizontally, swap the internals for durable pub/sub.
-
-export type StreamMessage = {
-  id: number;
-  sessionId: number;
-  sessionCreated: boolean;
-  device: string;
-  tool: string;
-  cwd: string | null;
-  ts: string;
-  text: string;
-};
+// In-process detector events. These never include agent message text.
 
 export type StreamAnnotation = {
   id: number;
@@ -31,13 +18,8 @@ export type StreamTerm = {
   salience: number | null;
 };
 
-export type ClientMessageEvent = {
-  type: "message";
-  message: StreamMessage;
-};
-
-// Result of the zero-AI detector for one message. The message always stays
-// verbatim; annotations simply make detected terms tappable.
+// Result of the zero-AI detector for one message. Raw text is intentionally
+// excluded from events; /live renders glossary terms only.
 export type ClientDetectionEvent = {
   type: "detection";
   messageId: number;
@@ -47,10 +29,9 @@ export type ClientDetectionEvent = {
   newTerms: StreamTerm[];
 };
 
-export type ClientStreamEvent = ClientMessageEvent | ClientDetectionEvent;
-export type MessageEvent = ClientMessageEvent & { userId: number };
+export type ClientStreamEvent = ClientDetectionEvent;
 export type DetectionEvent = ClientDetectionEvent & { userId: number };
-export type StreamEvent = MessageEvent | DetectionEvent;
+export type StreamEvent = DetectionEvent;
 
 const globalForBus = globalThis as unknown as { __unjargonBus?: EventEmitter };
 

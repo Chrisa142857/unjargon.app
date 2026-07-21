@@ -1,4 +1,4 @@
-import { and, count, countDistinct, desc, eq, gte, inArray, isNull, max, min, ne, sql } from "drizzle-orm";
+import { and, count, countDistinct, desc, eq, gte, isNotNull, isNull, max, min, ne, sql } from "drizzle-orm";
 import { db, tables } from "@/db";
 import { requireUser } from "@/lib/auth";
 import { isHighConfidenceTerm } from "@/lib/detect";
@@ -6,27 +6,30 @@ import { detectionDailyLimit, scheduleDetection, utcDayStart } from "@/lib/detec
 
 export const dynamic = "force-dynamic";
 
-// Everything /live needs on first paint, in one round-trip. The UI fetches
-// client-side (rather than server-rendering) so the same static export can
-// run on GitHub Pages against a remote API.
-//
+// /live deliberately returns only a selected machine's glossary. Raw agent
+// messages remain private local files and are never read back for this page.
 export async function GET(req: Request) {
   const user = await requireUser(req);
   if (user instanceof Response) return user;
-
-  // Start the zero-AI, oldest-first history pass. `detected_at` is separate
-  // from legacy AI processing, so existing history is not skipped.
   scheduleDetection(user.id);
 
-  // Truthful import status: completed means jargon detection finished.
+  const devices = await db
+    .select({ id: tables.devices.id, name: tables.devices.name, lastSeenAt: tables.devices.lastSeenAt })
+    .from(tables.devices)
+    .where(and(eq(tables.devices.userId, user.id), isNotNull(tables.devices.tokenHash)))
+    .orderBy(desc(tables.devices.lastSeenAt));
+  const requested = Number(new URL(req.url).searchParams.get("device"));
+  const selected = devices.find((device) => device.id === requested) ?? devices[0] ?? null;
+  if (!selected) {
+    return Response.json({ devices: [], selectedDeviceId: null, progress: emptyProgress(), terms: [] });
+  }
+
   const hourAgo = Date.now() - 3600_000;
   const [progress] = await db
     .select({
       messages: count(tables.messages.id),
       detected: count(tables.messages.detectedAt),
-      detectedLastHour: count(
-        sql`case when ${tables.messages.detectedAt} > ${hourAgo} then 1 end`,
-      ),
+      detectedLastHour: count(sql`case when ${tables.messages.detectedAt} > ${hourAgo} then 1 end`),
       sessions: countDistinct(tables.sessions.id),
       firstMessageAt: min(tables.messages.ts).mapWith(tables.messages.ts),
       lastMessageAt: max(tables.messages.ts).mapWith(tables.messages.ts),
@@ -34,61 +37,13 @@ export async function GET(req: Request) {
     })
     .from(tables.messages)
     .innerJoin(tables.sessions, eq(tables.messages.sessionId, tables.sessions.id))
-    .innerJoin(tables.devices, eq(tables.sessions.deviceId, tables.devices.id))
-    .where(eq(tables.devices.userId, user.id));
+    .where(eq(tables.sessions.deviceId, selected.id));
   const [{ detectedToday }] = await db
     .select({ detectedToday: count(tables.messages.id) })
     .from(tables.messages)
     .where(gte(tables.messages.detectedAt, utcDayStart()));
-  const progressPayload = {
-    messages: Number(progress.messages),
-    detected: Number(progress.detected),
-    ratePerHour: Number(progress.detectedLastHour),
-    dailyDetectionLimit: detectionDailyLimit,
-    dailyDetectionUsed: Number(detectedToday),
-    sessions: Number(progress.sessions),
-    firstMessageAt: progress.firstMessageAt?.toISOString() ?? null,
-    lastMessageAt: progress.lastMessageAt?.toISOString() ?? null,
-    lastImportedAt: progress.lastImportedAt?.toISOString() ?? null,
-  };
+
   const rows = await db
-    .select({
-      id: tables.messages.id,
-      sessionId: tables.messages.sessionId,
-      ts: tables.messages.ts,
-      text: tables.messages.text,
-      detectedAt: tables.messages.detectedAt,
-      device: tables.devices.name,
-      tool: tables.sessions.tool,
-      cwd: tables.sessions.cwd,
-    })
-    .from(tables.messages)
-    .innerJoin(tables.sessions, eq(tables.messages.sessionId, tables.sessions.id))
-    .innerJoin(tables.devices, eq(tables.sessions.deviceId, tables.devices.id))
-    .where(eq(tables.devices.userId, user.id))
-    .orderBy(desc(tables.messages.id))
-    .limit(99);
-  const ids = rows.map((r) => r.id);
-  const annotationRows =
-    ids.length > 0
-      ? await db
-          .select({
-            id: tables.annotations.id,
-            messageId: tables.annotations.messageId,
-            span: tables.annotations.span,
-            sentenceRewrite: tables.annotations.sentenceRewrite,
-            termId: tables.annotations.termId,
-          })
-          .from(tables.annotations)
-          .innerJoin(tables.terms, eq(tables.annotations.termId, tables.terms.id))
-          .where(and(
-            inArray(tables.annotations.messageId, ids),
-            isNull(tables.terms.userId),
-            ne(tables.terms.kind, "keyword"),
-          ))
-      : [];
-  // Terms with recency (latest sighting) — the chip board sorts by it.
-  const termRows = await db
     .select({
       id: tables.terms.id,
       term: tables.terms.term,
@@ -102,63 +57,28 @@ export async function GET(req: Request) {
       lastSeenAt: max(tables.messages.ts),
     })
     .from(tables.terms)
-    .innerJoin(
-      tables.termSightings,
-      eq(tables.termSightings.termId, tables.terms.id),
-    )
-    .innerJoin(
-      tables.messages,
-      eq(tables.messages.id, tables.termSightings.messageId),
-    )
+    .innerJoin(tables.termSightings, eq(tables.termSightings.termId, tables.terms.id))
+    .innerJoin(tables.messages, eq(tables.messages.id, tables.termSightings.messageId))
     .innerJoin(tables.sessions, eq(tables.messages.sessionId, tables.sessions.id))
-    .innerJoin(tables.devices, eq(tables.sessions.deviceId, tables.devices.id))
     .leftJoin(tables.userTerms, and(eq(tables.userTerms.termId, tables.terms.id), eq(tables.userTerms.userId, user.id)))
-    .where(and(eq(tables.devices.userId, user.id), isNull(tables.terms.userId), ne(tables.terms.kind, "keyword")))
+    .where(and(eq(tables.sessions.deviceId, selected.id), isNull(tables.terms.userId), ne(tables.terms.kind, "keyword")))
     .groupBy(tables.terms.id, tables.userTerms.l3, tables.userTerms.learnedAt);
-  const visibleTermRows = termRows.filter((term) =>
-    isHighConfidenceTerm(term.term, term.salience),
-  );
-  const visibleTermIds = new Set(visibleTermRows.map((term) => term.id));
-  const annotationsByMessage = new Map<
-    number,
-    { id: number; span: string; sentenceRewrite: string; termId: number | null }[]
-  >();
-  for (const a of annotationRows) {
-    if (a.termId === null || !visibleTermIds.has(a.termId)) continue;
-    const list = annotationsByMessage.get(a.messageId) ?? [];
-    list.push({
-      id: a.id,
-      span: a.span,
-      sentenceRewrite: a.sentenceRewrite,
-      termId: a.termId,
-    });
-    annotationsByMessage.set(a.messageId, list);
-  }
 
   return Response.json({
-    calibration: user.calibration,
-    progress: progressPayload,
-    terms: visibleTermRows.map((t) => ({
-      id: t.id,
-      term: t.term,
-      domain: t.domain,
-      kind: t.kind,
-      l1: t.l1,
-      l3: t.l3,
-      salience: t.salience,
-      learnedAt: t.learnedAt?.toISOString() ?? null,
-      lastSeenAt: (t.lastSeenAt ?? t.createdAt).toISOString(),
-    })),
-    messages: rows.reverse().map((r) => ({
-      id: r.id,
-      sessionId: r.sessionId,
-      device: r.device,
-      tool: r.tool,
-      cwd: r.cwd,
-      ts: r.ts.toISOString(),
-      text: r.text,
-      detected: r.detectedAt !== null,
-      annotations: annotationsByMessage.get(r.id) ?? [],
+    devices: devices.map((device) => ({ ...device, lastSeenAt: device.lastSeenAt.toISOString() })),
+    selectedDeviceId: selected.id,
+    progress: {
+      messages: Number(progress.messages), detected: Number(progress.detected), ratePerHour: Number(progress.detectedLastHour),
+      dailyDetectionLimit: detectionDailyLimit, dailyDetectionUsed: Number(detectedToday), sessions: Number(progress.sessions),
+      firstMessageAt: progress.firstMessageAt?.toISOString() ?? null, lastMessageAt: progress.lastMessageAt?.toISOString() ?? null,
+      lastImportedAt: progress.lastImportedAt?.toISOString() ?? null,
+    },
+    terms: rows.filter((term) => isHighConfidenceTerm(term.term, term.salience)).map((term) => ({
+      ...term, learnedAt: term.learnedAt?.toISOString() ?? null, lastSeenAt: (term.lastSeenAt ?? term.createdAt).toISOString(),
     })),
   });
+}
+
+function emptyProgress() {
+  return { messages: 0, detected: 0, ratePerHour: 0, dailyDetectionLimit: detectionDailyLimit, dailyDetectionUsed: 0, sessions: 0, firstMessageAt: null, lastMessageAt: null, lastImportedAt: null };
 }
