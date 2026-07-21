@@ -248,11 +248,14 @@ func (d *Daemon) cancelExpandWork(client *http.Client, id int) {
 // reportStatus records whether this collector can serve an explicit
 // explanation. Detection progress is wholly server-side and never waits.
 func (d *Daemon) reportStatus() {
-	body := map[string]any{"budget_used": 0, "budget_limit": 0}
+	body := map[string]any{"budget_used": 0, "budget_limit": 0, "input_tokens": 0, "output_tokens": 0, "tokens_reported": false}
 	if d.cfg.Expander != nil {
-		used, limit, resetAt := d.cfg.Expander.BudgetStatus()
+		used, limit, resetAt, inputTokens, outputTokens, reported := d.cfg.Expander.BudgetStatus()
 		body["budget_used"] = used
 		body["budget_limit"] = limit
+		body["input_tokens"] = inputTokens
+		body["output_tokens"] = outputTokens
+		body["tokens_reported"] = reported
 		if used >= limit && !resetAt.IsZero() {
 			body["paused_until"] = resetAt.UTC().Format(time.RFC3339)
 		}

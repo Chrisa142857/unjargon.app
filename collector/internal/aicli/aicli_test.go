@@ -45,7 +45,7 @@ func TestCompleteReturnsBudgetWaitWithoutBlocking(t *testing.T) {
 	if !wait.Until.After(time.Now()) {
 		t.Fatalf("Until must be in the future, got %s", wait.Until)
 	}
-	if used, limit, reset := tr.BudgetStatus(); used != 30 || limit != 30 || reset.IsZero() {
+	if used, limit, reset, _, _, _ := tr.BudgetStatus(); used != 30 || limit != 30 || reset.IsZero() {
 		t.Fatalf("BudgetStatus() = %d/%d reset %s", used, limit, reset)
 	}
 }
@@ -72,5 +72,20 @@ func TestDetectUsesCodexWhenClaudeIsMissing(t *testing.T) {
 	}
 	if got, want := strings.Join(tr.Command, " "), "codex exec --skip-git-repo-check --ephemeral --sandbox read-only"; got != want {
 		t.Fatalf("command = %q, want %q", got, want)
+	}
+}
+
+func TestDetectPrefersCodexWhenBothArePresent(t *testing.T) {
+	bin := t.TempDir()
+	for _, name := range []string{"claude", "codex"} {
+		if err := os.WriteFile(filepath.Join(bin, name), []byte("#!/bin/sh\n"), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("PATH", bin)
+	t.Setenv("UNJARGON_TRANSLATE_CMD", "")
+	tr, err := Detect("auto", t.TempDir())
+	if err != nil || tr == nil || tr.Command[0] != "codex" {
+		t.Fatalf("Detect(auto) = %#v, %v; want Codex", tr, err)
 	}
 }

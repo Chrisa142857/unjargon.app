@@ -39,7 +39,7 @@ Common flags:
   -server URL   unjargon web app (default http://localhost:3000, env UNJARGON_SERVER)
   -token  TOK   device bearer token (env UNJARGON_TOKEN)
   -device NAME  device name shown in the UI (default hostname, env UNJARGON_DEVICE)
-  -local-explain auto|on|off
+  -local-explain auto|codex|claude|on|off
                 allow buttons in unjargon to use THIS machine's AI CLI
                 (Claude Code or Codex) for an explanation. Detection never uses AI.
                 Calls are capped at 30 × 30 seconds per rolling 5 hours.
@@ -148,9 +148,9 @@ func commonFlags(fs *flag.FlagSet) (server, token, device, localExplain *string)
 // newExpander resolves optional local explanation mode and prints its notice.
 func newExpander(mode, stateDir string) *aicli.Translator {
 	switch mode {
-	case "auto", "on", "off":
+	case "auto", "codex", "claude", "on", "off":
 	default:
-		log.Fatalf("-local-explain must be auto, on, or off (got %q)", mode)
+		log.Fatalf("-local-explain must be auto, codex, claude, on, or off (got %q)", mode)
 	}
 	t, err := aicli.Detect(mode, stateDir)
 	if err != nil {

@@ -53,6 +53,11 @@ type ImportProgress = {
   firstMessageAt: string | null;
   lastMessageAt: string | null;
   lastImportedAt: string | null;
+  aiCallsUsed: number;
+  aiCallsLimit: number;
+  aiInputTokens: number;
+  aiOutputTokens: number;
+  aiTokensReported: boolean;
 };
 
 const INSTALL_COMMAND =
@@ -297,6 +302,12 @@ function ImportProgressCard({ progress }: { progress: ImportProgress }) {
   );
 }
 
+function AiUsageIndicator({ progress }: { progress: ImportProgress }) {
+  if (progress.aiCallsLimit === 0) return null;
+  const tokens = progress.aiInputTokens + progress.aiOutputTokens;
+  return <p className="mb-5 text-xs text-neutral-500">Optional AI on this machine: <span className="text-neutral-300">{progress.aiCallsUsed} / {progress.aiCallsLimit} calls</span> in the rolling five-hour safety limit{progress.aiTokensReported ? <> · <span className="text-neutral-300">{tokens.toLocaleString()} tokens</span> ({progress.aiInputTokens.toLocaleString()} input, {progress.aiOutputTokens.toLocaleString()} output)</> : " · exact tokens are not reported by this CLI"}.</p>;
+}
+
 // /live, chips first. The primary surface is the term board: picked
 // domain terms and acronyms grouped by domain, bright until opened —
 // what the agent's work is teaching you, not what the agent said. A slim
@@ -314,7 +325,7 @@ function LegacyLiveStream() {
   const [connected, setConnected] = useState(false);
   const [pinned, setPinned] = useState(true);
   const [calibration, setCalibration] = useState<Calibration>("new");
-  const [progress, setProgress] = useState<ImportProgress>({ messages: 0, detected: 0, ratePerHour: 0, dailyDetectionLimit: 0, dailyDetectionUsed: 0, sessions: 0, firstMessageAt: null, lastMessageAt: null, lastImportedAt: null });
+  const [progress, setProgress] = useState<ImportProgress>({ messages: 0, detected: 0, ratePerHour: 0, dailyDetectionLimit: 0, dailyDetectionUsed: 0, sessions: 0, firstMessageAt: null, lastMessageAt: null, lastImportedAt: null, aiCallsUsed: 0, aiCallsLimit: 0, aiInputTokens: 0, aiOutputTokens: 0, aiTokensReported: false });
 
   useEffect(() => {
     if (bounceToApiOrigin("/live")) return; // static build → the app runs on the backend
@@ -1240,7 +1251,7 @@ export default function LiveStream() {
   const [devices, setDevices] = useState<PairedDevice[]>([]);
   const [selectedDeviceId, setSelectedDeviceId] = useState<number | null>(null);
   const [terms, setTerms] = useState<LiveTerm[]>([]);
-  const [progress, setProgress] = useState<ImportProgress>({ messages: 0, detected: 0, ratePerHour: 0, dailyDetectionLimit: 0, dailyDetectionUsed: 0, sessions: 0, firstMessageAt: null, lastMessageAt: null, lastImportedAt: null });
+  const [progress, setProgress] = useState<ImportProgress>({ messages: 0, detected: 0, ratePerHour: 0, dailyDetectionLimit: 0, dailyDetectionUsed: 0, sessions: 0, firstMessageAt: null, lastMessageAt: null, lastImportedAt: null, aiCallsUsed: 0, aiCallsLimit: 0, aiInputTokens: 0, aiOutputTokens: 0, aiTokensReported: false });
   const [loaded, setLoaded] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [showPairing, setShowPairing] = useState(false);
@@ -1317,6 +1328,7 @@ export default function LiveStream() {
           {showPairing && <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/70 px-4 py-10 backdrop-blur-sm"><InstallCollectorCallout onClose={() => setShowPairing(false)} /></div>}
           {showUninstall && <section className="mb-5 rounded-lg border border-rose-300/20 bg-rose-300/[0.04] px-4 py-3 text-sm text-neutral-300"><p>Run this on the machine you want to remove. It stops and removes the local collector, service, queue, logs, and Claude hook; transcripts and wiki history stay intact.</p><code className="mt-3 block overflow-x-auto rounded bg-neutral-950 px-3 py-2 text-xs text-neutral-100">{UNINSTALL_COMMAND}</code><p className="mt-4 text-xs text-neutral-500">Already used an older uninstall command? Remove its stale server pairing below; this never affects the machine or its wiki history.</p><button onClick={removeStaleMachine} disabled={removing || selectedDeviceId === null} className="mt-2 text-xs text-rose-300 hover:text-rose-200 disabled:opacity-50">{removing ? "Removing…" : "Remove stale pairing"}</button></section>}
           <ImportProgressCard progress={progress} />
+          <AiUsageIndicator progress={progress} />
           {terms.length === 0 && <div className="text-center text-neutral-500">{!loaded ? "loading…" : loadError ? <><p>couldn&apos;t reach the unjargon API — {loadError}</p><BackendPrompt /></> : devices.length === 0 ? <InstallCollectorCallout /> : "No terms yet — unjargon is checking this machine's history."}</div>}
           <ChipBoard terms={terms} onExpanded={cacheExpansion} onLearned={markLearned} />
         </div>

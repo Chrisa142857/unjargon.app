@@ -14,7 +14,7 @@ export async function GET(req: Request) {
   scheduleDetection(user.id);
 
   const devices = await db
-    .select({ id: tables.devices.id, name: tables.devices.name, lastSeenAt: tables.devices.lastSeenAt })
+    .select({ id: tables.devices.id, name: tables.devices.name, lastSeenAt: tables.devices.lastSeenAt, importStatus: tables.devices.importStatus })
     .from(tables.devices)
     .where(and(eq(tables.devices.userId, user.id), isNotNull(tables.devices.tokenHash)))
     .orderBy(desc(tables.devices.lastSeenAt));
@@ -65,13 +65,14 @@ export async function GET(req: Request) {
     .groupBy(tables.terms.id, tables.userTerms.l3, tables.userTerms.learnedAt);
 
   return Response.json({
-    devices: devices.map((device) => ({ ...device, lastSeenAt: device.lastSeenAt.toISOString() })),
+    devices: devices.map((device) => ({ id: device.id, name: device.name, lastSeenAt: device.lastSeenAt.toISOString() })),
     selectedDeviceId: selected.id,
     progress: {
       messages: Number(progress.messages), detected: Number(progress.detected), ratePerHour: Number(progress.detectedLastHour),
       dailyDetectionLimit: detectionDailyLimit, dailyDetectionUsed: Number(detectedToday), sessions: Number(progress.sessions),
       firstMessageAt: progress.firstMessageAt?.toISOString() ?? null, lastMessageAt: progress.lastMessageAt?.toISOString() ?? null,
       lastImportedAt: progress.lastImportedAt?.toISOString() ?? null,
+      ...aiUsage(selected.importStatus),
     },
     terms: rows.filter((term) => isHighConfidenceTerm(term.term, term.salience)).map((term) => ({
       ...term, learnedAt: term.learnedAt?.toISOString() ?? null, lastSeenAt: (term.lastSeenAt ?? term.createdAt).toISOString(),
@@ -80,5 +81,14 @@ export async function GET(req: Request) {
 }
 
 function emptyProgress() {
-  return { messages: 0, detected: 0, ratePerHour: 0, dailyDetectionLimit: detectionDailyLimit, dailyDetectionUsed: 0, sessions: 0, firstMessageAt: null, lastMessageAt: null, lastImportedAt: null };
+  return { messages: 0, detected: 0, ratePerHour: 0, dailyDetectionLimit: detectionDailyLimit, dailyDetectionUsed: 0, sessions: 0, firstMessageAt: null, lastMessageAt: null, ...aiUsage(null) };
+}
+
+function aiUsage(raw: string | null) {
+  try {
+    const status = JSON.parse(raw ?? "") as { budgetUsed?: unknown; budgetLimit?: unknown; inputTokens?: unknown; outputTokens?: unknown; tokensReported?: unknown };
+    return { aiCallsUsed: Number(status.budgetUsed) || 0, aiCallsLimit: Number(status.budgetLimit) || 0, aiInputTokens: Number(status.inputTokens) || 0, aiOutputTokens: Number(status.outputTokens) || 0, aiTokensReported: status.tokensReported === true };
+  } catch {
+    return { aiCallsUsed: 0, aiCallsLimit: 0, aiInputTokens: 0, aiOutputTokens: 0, aiTokensReported: false };
+  }
 }

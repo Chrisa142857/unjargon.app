@@ -11,7 +11,7 @@ export const dynamic = "force-dynamic";
 export async function POST(req: Request) {
   const device = await deviceForRequest(req);
   if (!device) return Response.json({ error: "invalid device token" }, { status: 401 });
-  let body: { paused_until?: string; budget_used?: number; budget_limit?: number };
+  let body: { paused_until?: string; budget_used?: number; budget_limit?: number; input_tokens?: number; output_tokens?: number; tokens_reported?: boolean };
   try {
     body = await req.json();
   } catch {
@@ -25,11 +25,14 @@ export async function POST(req: Request) {
     pausedUntil,
     budgetUsed: Number(body.budget_used) || 0,
     budgetLimit: Number(body.budget_limit) || 0,
+    inputTokens: Number(body.input_tokens) || 0,
+    outputTokens: Number(body.output_tokens) || 0,
+    tokensReported: body.tokens_reported === true,
     updatedAt: new Date().toISOString(),
   };
   try {
     const previous = JSON.parse(device.importStatus ?? "") as typeof next;
-    const unchanged = previous.pausedUntil === next.pausedUntil && previous.budgetUsed === next.budgetUsed && previous.budgetLimit === next.budgetLimit;
+    const unchanged = previous.pausedUntil === next.pausedUntil && previous.budgetUsed === next.budgetUsed && previous.budgetLimit === next.budgetLimit && previous.inputTokens === next.inputTokens && previous.outputTokens === next.outputTokens && previous.tokensReported === next.tokensReported;
     if (unchanged && Date.now() - Date.parse(previous.updatedAt) < collectorLimits.statusWriteIntervalMs) {
       return Response.json({ ok: true });
     }

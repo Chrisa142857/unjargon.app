@@ -18,7 +18,10 @@ const budgetWindow = 5 * time.Hour
 const budgetLimit = budgetWindow / 20 // 5% of a five-hour window
 
 type budgetUse struct {
-	At time.Time `json:"at"`
+	At           time.Time `json:"at"`
+	InputTokens  int       `json:"input_tokens,omitempty"`
+	OutputTokens int       `json:"output_tokens,omitempty"`
+	Reported     bool      `json:"reported,omitempty"`
 }
 
 // ErrBudgetWait means the optional explanation budget is spent. Callers must
@@ -69,7 +72,7 @@ func (b *budget) reserve() time.Duration {
 
 // status reports calls used in the current window and when the oldest use
 // rolls out of it (zero time when the window is empty).
-func (b *budget) status() (used int, resetAt time.Time) {
+func (b *budget) status() (used int, resetAt time.Time, inputTokens int, outputTokens int, reported bool) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	cutoff := time.Now().Add(-budgetWindow)
@@ -80,10 +83,31 @@ func (b *budget) status() (used int, resetAt time.Time) {
 		}
 	}
 	b.uses = kept
-	if len(b.uses) == 0 {
-		return 0, time.Time{}
+	for _, use := range b.uses {
+		inputTokens += use.InputTokens
+		outputTokens += use.OutputTokens
+		reported = reported || use.Reported
 	}
-	return len(b.uses), b.uses[0].At.Add(budgetWindow)
+	if len(b.uses) == 0 {
+		return 0, time.Time{}, 0, 0, false
+	}
+	return len(b.uses), b.uses[0].At.Add(budgetWindow), inputTokens, outputTokens, reported
+}
+
+func (b *budget) recordUsage(inputTokens, outputTokens int, reported bool) {
+	if !reported {
+		return
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if len(b.uses) == 0 {
+		return
+	}
+	b.uses[len(b.uses)-1].InputTokens = inputTokens
+	b.uses[len(b.uses)-1].OutputTokens = outputTokens
+	b.uses[len(b.uses)-1].Reported = true
+	data, _ := json.Marshal(b.uses)
+	_ = os.WriteFile(b.path, data, 0o600)
 }
 
 type Translator struct {
@@ -93,7 +117,9 @@ type Translator struct {
 	budget  *budget
 }
 
-// Detect builds a Translator according to mode ("auto" | "on" | "off").
+// Detect builds a Translator according to mode ("auto" | "claude" | "codex" |
+// "on" | "off"). In auto mode Codex wins when both CLIs exist: this avoids
+// choosing an unrelated, signed-out Claude install on a Codex machine.
 // In auto mode it quietly returns nil when no AI CLI is available.
 func Detect(mode, stateDir string) (*Translator, error) {
 	if mode == "off" {
@@ -101,15 +127,22 @@ func Detect(mode, stateDir string) (*Translator, error) {
 	}
 	cmd, model := commandFromEnv()
 	if cmd == nil {
-		if _, err := exec.LookPath("claude"); err == nil {
-			cmd = []string{"claude", "--output-format", "json", "-p"}
-		} else if _, err := exec.LookPath("codex"); err == nil {
-			// `exec` is non-interactive and ephemeral. Read-only keeps an
-			// explanation request from modifying the user's workspace.
-			cmd = []string{"codex", "exec", "--skip-git-repo-check", "--ephemeral", "--sandbox", "read-only"}
-		} else if mode == "on" {
-			return nil, fmt.Errorf("local-explain=on but no Claude Code or Codex CLI on PATH (and UNJARGON_TRANSLATE_CMD unset)")
-		} else {
+		if mode != "claude" {
+			if _, err := exec.LookPath("codex"); err == nil {
+				// `exec` is non-interactive and ephemeral. Read-only keeps an
+				// explanation request from modifying the user's workspace.
+				cmd = []string{"codex", "exec", "--skip-git-repo-check", "--ephemeral", "--sandbox", "read-only"}
+			}
+		}
+		if cmd == nil && mode != "codex" {
+			if _, err := exec.LookPath("claude"); err == nil {
+				cmd = []string{"claude", "--output-format", "json", "-p"}
+			}
+		}
+		if cmd == nil && (mode == "on" || mode == "claude" || mode == "codex") {
+			return nil, fmt.Errorf("local-explain=%s but its AI CLI was not found on PATH", mode)
+		}
+		if cmd == nil {
 			return nil, nil
 		}
 	}
@@ -160,9 +193,9 @@ func (t *Translator) Notice() string {
 
 // BudgetStatus reports local AI budget state for /api/status: calls used in
 // the rolling window, the cap, and when the oldest call rolls out.
-func (t *Translator) BudgetStatus() (used, limit int, resetAt time.Time) {
-	used, resetAt = t.budget.status()
-	return used, int(budgetLimit / callTimeout), resetAt
+func (t *Translator) BudgetStatus() (used, limit int, resetAt time.Time, inputTokens, outputTokens int, reported bool) {
+	used, resetAt, inputTokens, outputTokens, reported = t.budget.status()
+	return used, int(budgetLimit / callTimeout), resetAt, inputTokens, outputTokens, reported
 }
 
 // Complete runs an arbitrary prompt through the user's AI CLI and returns the
@@ -190,9 +223,32 @@ func (t *Translator) Complete(prompt string) (string, error) {
 	err := cmd.Run()
 	timer.Stop()
 	if err != nil {
-		return "", fmt.Errorf("%s: %v (%s)", t.Command[0], err, firstLine(stderr.String()))
+		detail := firstLine(stderr.String())
+		if detail == "" {
+			detail = firstLine(stdout.String())
+		}
+		return "", fmt.Errorf("%s: %v (%s)", t.Command[0], err, detail)
 	}
+	inputTokens, outputTokens, reported := usageFromOutput(stdout.String())
+	t.budget.recordUsage(inputTokens, outputTokens, reported)
 	return stdout.String(), nil
+}
+
+// Claude's JSON result includes actual API usage. Codex's plain final-output
+// mode does not, so the UI explicitly says when an exact count is unavailable.
+func usageFromOutput(out string) (inputTokens, outputTokens int, reported bool) {
+	var result struct {
+		Usage *struct {
+			InputTokens              int `json:"input_tokens"`
+			OutputTokens             int `json:"output_tokens"`
+			CacheReadInputTokens     int `json:"cache_read_input_tokens"`
+			CacheCreationInputTokens int `json:"cache_creation_input_tokens"`
+		} `json:"usage"`
+	}
+	if json.Unmarshal([]byte(out), &result) != nil || result.Usage == nil {
+		return 0, 0, false
+	}
+	return result.Usage.InputTokens + result.Usage.CacheReadInputTokens + result.Usage.CacheCreationInputTokens, result.Usage.OutputTokens, true
 }
 
 // jsonObject strips a claude-CLI envelope and markdown fences, returning the
