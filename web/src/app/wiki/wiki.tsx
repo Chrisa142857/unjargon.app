@@ -6,7 +6,6 @@ import { api, bounceToApiOrigin } from "@/lib/api";
 import AccountMenu from "@/app/account-menu";
 import { AiCallConfirmButton } from "@/app/ai-confirm";
 import { TermReference } from "@/app/term-reference";
-import { zeroAiTermNote } from "@/lib/reference";
 
 export type WikiTerm = {
   id: number;
@@ -168,9 +167,7 @@ function TermRow({ term, onOpen }: { term: WikiTerm; onOpen: () => void }) {
       className="flex w-full items-baseline gap-3 rounded-lg border border-neutral-800 bg-neutral-900/50 px-3 py-2.5 text-left hover:border-neutral-700"
     >
       <span className="font-medium">{term.term}</span>
-      <span className="min-w-0 flex-1 truncate text-sm text-neutral-400">
-        {zeroAiTermNote(term.kind)}
-      </span>
+      <span className="min-w-0 flex-1 truncate text-sm text-neutral-400">{term.domain}</span>
       <span className="shrink-0 text-xs text-neutral-600">
         {term.sightings}× · {term.sessions} session{term.sessions === 1 ? "" : "s"}
       </span>
@@ -240,7 +237,7 @@ function TermPage({
         Seen in {term.sightings} message{term.sightings === 1 ? "" : "s"}, {term.sessions} session{term.sessions === 1 ? "" : "s"}, and {term.devices} machine{term.devices === 1 ? "" : "s"}.
       </p>
       <div className="mt-6">
-        <TermReference id={term.id} term={term.term} kind={term.kind} />
+        <TermReference id={term.id} term={term.term} />
       </div>
       <section className="mt-5 rounded-lg border border-neutral-800 bg-neutral-900/50 p-4">
         <p className="text-[10px] font-medium uppercase tracking-widest text-neutral-500">In your sessions · optional AI</p>

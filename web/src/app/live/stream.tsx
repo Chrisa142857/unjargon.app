@@ -7,7 +7,6 @@ import type { ClientStreamEvent } from "@/lib/bus";
 import AccountMenu from "@/app/account-menu";
 import { AiCallConfirmButton } from "@/app/ai-confirm";
 import { TermReference } from "@/app/term-reference";
-import { zeroAiTermNote } from "@/lib/reference";
 
 export type LiveAnnotation = {
   id: number;
@@ -205,7 +204,8 @@ function InstallCollectorCallout({ onClose }: { onClose?: () => void }) {
   }
 
   return (
-    <div className="mx-auto mt-20 max-w-2xl rounded-xl border border-amber-200/20 bg-amber-300/[0.06] px-6 py-7 text-center shadow-[0_0_45px_rgba(252,211,77,0.06)]">
+    <div className={`relative mx-auto max-w-2xl rounded-xl border border-amber-200/20 bg-amber-300/[0.06] px-6 py-7 text-center shadow-[0_0_45px_rgba(252,211,77,0.06)] ${onClose ? "" : "mt-20"}`}>
+      {onClose && <button onClick={onClose} aria-label="close pairing" className="absolute right-3 top-3 text-lg text-neutral-400 hover:text-neutral-100">×</button>}
       <p className="text-base font-medium text-amber-100">Connect an AI agent</p>
       <p className="mt-2 text-sm text-neutral-400">
         Run this on the macOS or Linux machine where Claude Code or Codex works.
@@ -217,7 +217,6 @@ function InstallCollectorCallout({ onClose }: { onClose?: () => void }) {
       <button onClick={createPairingCode} className="mt-4 rounded-md bg-amber-200 px-4 py-2 text-sm font-medium text-neutral-950 hover:bg-amber-100">
         {pairingCode ? "Make a new pairing code" : "Create pairing code"}
       </button>
-      {onClose && <button onClick={onClose} className="ml-3 text-sm text-neutral-400 hover:text-neutral-200">close</button>}
       {pairingCode && <p className="mt-3 text-sm text-amber-100">Pairing code: <code className="select-all font-semibold">{pairingCode}</code> <span className="text-neutral-400">(expires in 10 minutes)</span></p>}
       {pairingError && <p className="mt-3 text-sm text-rose-300">{pairingError}</p>}
       <p className="mt-6 text-xs text-neutral-500">To remove the collector from a machine later (its local queue and logs are deleted; transcripts are not):</p>
@@ -829,7 +828,7 @@ function InlineTermCard({
           </p>
         </div>
         <div className="border-t border-white/[0.06] px-3.5 py-3 text-sm leading-relaxed">
-          <TermReference id={term.id} term={term.term} kind={term.kind} wikiHref={`/wiki?term=${term.id}`} />
+          <TermReference id={term.id} term={term.term} wikiHref={`/wiki?term=${term.id}`} />
           {error && <p className="text-red-400/90">couldn&apos;t load — {error}</p>}
           {term.l3 ? (
             <div className="mt-3 border-t border-white/[0.06] pt-2">
@@ -1052,11 +1051,6 @@ function ChipBoard({
         >
           {t.term}
         </p>
-        {hero && (
-          <p className="mt-1.5 line-clamp-2 text-sm leading-relaxed text-neutral-400">
-            {zeroAiTermNote(t.kind)}
-          </p>
-        )}
       </button>
     );
   };
@@ -1297,7 +1291,7 @@ export default function LiveStream() {
       </header>
       <div className="relative z-10 flex-1 px-4 py-6">
         <div className="mx-auto max-w-2xl">
-          {showPairing && <InstallCollectorCallout onClose={() => setShowPairing(false)} />}
+          {showPairing && <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/70 px-4 py-10 backdrop-blur-sm"><InstallCollectorCallout onClose={() => setShowPairing(false)} /></div>}
           {showUninstall && <section className="mb-5 rounded-lg border border-rose-300/20 bg-rose-300/[0.04] px-4 py-3 text-sm text-neutral-300"><p>Run this on the machine you want to remove. It stops and removes the local collector, service, queue, logs, and Claude hook; transcripts and wiki history stay intact.</p><code className="mt-3 block overflow-x-auto rounded bg-neutral-950 px-3 py-2 text-xs text-neutral-100">{UNINSTALL_COMMAND}</code></section>}
           <ImportProgressCard progress={progress} />
           {terms.length === 0 && <div className="text-center text-neutral-500">{!loaded ? "loading…" : loadError ? <><p>couldn&apos;t reach the unjargon API — {loadError}</p><BackendPrompt /></> : devices.length === 0 ? <InstallCollectorCallout /> : "No terms yet — unjargon is checking this machine's history."}</div>}

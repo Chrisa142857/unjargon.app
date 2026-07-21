@@ -3,7 +3,6 @@ import {
   googleDefinitionUrl,
   wikipediaReference,
   wikipediaSearchUrl,
-  zeroAiTermNote,
 } from "../src/lib/reference.ts";
 
 const seen: string[] = [];
@@ -27,5 +26,4 @@ assert.equal(reference?.candidates.length, 2, "search alternatives remain availa
 assert.equal(seen.length, 2, "search then summary only");
 assert.match(googleDefinitionUrl("BDF"), /q=BDF\+definition/);
 assert.match(wikipediaSearchUrl("BDF"), /search=BDF/);
-assert.match(zeroAiTermNote("initial"), /acronym/);
 console.log("zero-AI reference check passed");

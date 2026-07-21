@@ -6,19 +6,16 @@ import { api } from "@/lib/api";
 import {
   googleDefinitionUrl,
   wikipediaSearchUrl,
-  zeroAiTermNote,
   type WikipediaReference,
 } from "@/lib/reference";
 
 export function TermReference({
   id,
   term,
-  kind,
   wikiHref,
 }: {
   id: number;
   term: string;
-  kind: string;
   wikiHref?: string;
 }) {
   const [reference, setReference] = useState<WikipediaReference | null>(null);
@@ -47,7 +44,6 @@ export function TermReference({
       <p className="text-[10px] font-medium uppercase tracking-widest text-sky-200/70">
         Basic reference · zero AI
       </p>
-      <p className="mt-1 text-sm leading-relaxed text-neutral-300">{zeroAiTermNote(kind)}</p>
       {!loaded ? (
         <p className="mt-2 animate-pulse text-xs text-neutral-500">looking up a public Wikipedia reference…</p>
       ) : reference?.extract ? (

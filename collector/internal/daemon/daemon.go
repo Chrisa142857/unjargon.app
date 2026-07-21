@@ -118,17 +118,21 @@ func (d *Daemon) Run() error {
 	defer flushTick.Stop()
 	pollTick := time.NewTicker(d.cfg.Interval)
 	defer pollTick.Stop()
-	workTick := time.NewTicker(30 * time.Second)
-	defer workTick.Stop()
+	scanTick := time.NewTicker(30 * time.Second)
+	defer scanTick.Stop()
 
-	go d.reportStatus()
+	// History scans can take longer than a status interval on machines with
+	// thousands of old transcripts. Keep the optional explanation heartbeat
+	// independent so a healthy collector remains reachable while scanning.
+	go d.backgroundWork()
 	d.scan()
 	d.poll()
 	for {
 		select {
 		case <-pollTick.C:
-			d.scan()
 			d.poll()
+		case <-scanTick.C:
+			d.scan()
 		case <-flushTick.C:
 			if !time.Now().Before(d.retryUntil) {
 				if n, err := d.queue.Flush(d.cfg.Shipper.SendRaw); n > 0 || err != nil {
@@ -136,18 +140,25 @@ func (d *Daemon) Run() error {
 					log.Printf("offline queue: flushed %d, %d left (err=%v)", n, d.queue.Len(), err)
 				}
 			}
-		case <-workTick.C:
-			go d.reportStatus()
-			// Explicit explanation work runs separately so AI calls never stall
-			// transcript tailing.
-			if d.cfg.Expander != nil && d.workBusy.CompareAndSwap(false, true) {
-				go func() {
-					defer d.workBusy.Store(false)
-					d.expandWork() // a user is actively waiting on these
-					d.reportStatus()
-				}()
-			}
 		}
+	}
+}
+
+func (d *Daemon) backgroundWork() {
+	tick := time.NewTicker(30 * time.Second)
+	defer tick.Stop()
+	for {
+		d.reportStatus()
+		// Explicit explanation work runs separately so AI calls never stall
+		// transcript tailing or collector heartbeats.
+		if d.cfg.Expander != nil && d.workBusy.CompareAndSwap(false, true) {
+			go func() {
+				defer d.workBusy.Store(false)
+				d.expandWork()
+				d.reportStatus()
+			}()
+		}
+		<-tick.C
 	}
 }
 
@@ -236,9 +247,13 @@ func (d *Daemon) reportStatus() {
 	client := &http.Client{Timeout: 10 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
-		return // best-effort; next tick retries
+		log.Printf("status heartbeat failed: %v", err)
+		return
 	}
 	resp.Body.Close()
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		log.Printf("status heartbeat failed: server returned %s", resp.Status)
+	}
 }
 
 // handleNotify is the SessionStart-hook path: `unjargond hook` posts

@@ -19,12 +19,6 @@ export function wikipediaSearchUrl(term: string) {
   return `https://en.wikipedia.org/wiki/Special:Search?${new URLSearchParams({ search: term })}`;
 }
 
-export function zeroAiTermNote(kind: string) {
-  return kind === "initial"
-    ? "Technical acronym detected without AI. Its expansion can vary by field."
-    : "Technical vocabulary detected without AI. Use the public reference for a basic definition.";
-}
-
 // Public reference only: this receives a detected term, never transcript text.
 export async function wikipediaReference(
   rawTerm: string,
