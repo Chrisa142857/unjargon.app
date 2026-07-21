@@ -1,13 +1,15 @@
-import { and, asc, count, eq, gte, isNull } from "drizzle-orm";
+import { and, asc, count, eq, gte, isNull, ne, sql } from "drizzle-orm";
 import { db, tables } from "@/db";
 import { publish, type DetectionEvent } from "@/lib/bus";
 import { detectJargon } from "@/lib/detect";
+import { retainTerm, type TermBudget } from "@/lib/term-budget";
 
-// Fifty rows bounds D1 work without increasing the daily Free-plan allowance.
+// Fifty rows keeps a large backfill responsive.
 const BATCH_SIZE = 50;
 const L1 = "Detected without AI. Open the public reference for a basic definition.";
+const HISTORY_GRACE_MS = 5 * 60_000;
 export const detectionDailyLimit = (() => {
-  // Conservative Free-plan default. Increase only after checking D1 Row Metrics.
+  // A daily ceiling keeps the paid D1 budget predictable.
   const value = Number(process.env.D1_DAILY_DETECTION_MESSAGES ?? 1_000);
   return Number.isInteger(value) && value > 0 ? value : 1_000;
 })();
@@ -101,12 +103,32 @@ async function detectBatch(userId: number) {
     .limit(batchSize);
   if (rows.length === 0) return "done" as const;
 
+  const budget = await loadTermBudget(userId);
   const sharedTerms = new Map<string, SharedTerm>();
   for (const [index, { message }] of rows.entries()) {
-    await storeDetection(message, userId, sharedTerms, usedToday + index + 1);
+    await storeDetection(message, userId, sharedTerms, budget, usedToday + index + 1);
   }
   if (rows.length >= remaining) return "quota" as const;
   return rows.length === batchSize ? "more" as const : "done" as const;
+}
+
+async function loadTermBudget(userId: number): Promise<TermBudget> {
+  const seen = await db
+    .select({
+      key: tables.terms.key,
+      historical: sql<number>`max(case when ${tables.messages.ts} < ${tables.messages.createdAt} - ${HISTORY_GRACE_MS} then 1 else 0 end)`,
+    })
+    .from(tables.terms)
+    .innerJoin(tables.termSightings, eq(tables.termSightings.termId, tables.terms.id))
+    .innerJoin(tables.messages, eq(tables.messages.id, tables.termSightings.messageId))
+    .innerJoin(tables.sessions, eq(tables.sessions.id, tables.messages.sessionId))
+    .innerJoin(tables.devices, eq(tables.devices.id, tables.sessions.deviceId))
+    .where(and(eq(tables.devices.userId, userId), isNull(tables.terms.userId), ne(tables.terms.kind, "keyword")))
+    .groupBy(tables.terms.key);
+  return {
+    history: new Set(seen.filter((term) => Number(term.historical)).map((term) => term.key)),
+    live: new Set(seen.filter((term) => !Number(term.historical)).map((term) => term.key)),
+  };
 }
 
 type SharedTerm = {
@@ -122,6 +144,7 @@ async function storeDetection(
   message: typeof tables.messages.$inferSelect,
   userId: number,
   sharedTerms: Map<string, SharedTerm>,
+  budget: TermBudget,
   dailyDetectionUsed: number,
 ) {
   // Only candidates from detectJargon reach this path. In particular, do not
@@ -129,9 +152,11 @@ async function storeDetection(
   // chips inside paths, commands, and code identifiers.
   const byKey = new Map<string, { id: number; term: string }>();
   const newTerms: DetectionEvent["newTerms"] = [];
+  const historical = message.ts.getTime() < message.createdAt.getTime() - HISTORY_GRACE_MS;
 
   for (const detected of detectJargon(message.text)) {
     const key = detected.term.toLowerCase();
+    if (!retainTerm(budget, key, historical)) continue;
     let term = sharedTerms.get(key);
     if (!term) {
       const [inserted] = await db

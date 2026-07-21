@@ -24,7 +24,7 @@ export type LiveTerm = {
   l1: string;
   l3: string | null;
   salience: number | null;
-  learnedAt: string | null; // opened at least once → chip dims
+  learnedAt: string | null;
   lastSeenAt: string; // latest sighting → board ordering
 };
 
@@ -366,7 +366,7 @@ export default function LiveStream() {
     );
   }
 
-  // Opening a card = the user looked at it: dim the chip, persist server-side.
+  // Learning is explicit; simply opening a term changes nothing.
   function markLearned(termId: number) {
     setTerms((prev) =>
       prev.map((t) =>
@@ -752,7 +752,6 @@ function InlineTermCard({
   onExpanded: (termId: number, l3: string | null) => void;
   onLearned: (termId: number) => void;
 }) {
-  const [open, setOpen] = useState(false);
   const [grounding, setGrounding] = useState(false);
   const [error, setError] = useState<string | null>(null);
   // On a no-key server the confirmed in-session work is queued for the
@@ -780,10 +779,10 @@ function InlineTermCard({
     };
   });
   useEffect(() => {
-    if (!open || !pending.grounding) return;
+    if (!pending.grounding) return;
     const timer = window.setInterval(() => pollRef.current(), 5000);
     return () => window.clearInterval(timer);
-  }, [open, pending.grounding]);
+  }, [pending.grounding]);
 
   async function requestExplanation() {
     try {
@@ -801,15 +800,6 @@ function InlineTermCard({
     }
   }
 
-  // Opening a card only reveals detector output. AI is always an explicit
-  // button press below, never a side effect of reading a term.
-  async function toggleLong() {
-    const next = !open;
-    setOpen(next);
-    setError(null);
-    if (next) onLearned(term.id);
-  }
-
   async function loadGrounding() {
     if (grounding) return;
     setGrounding(true);
@@ -823,55 +813,32 @@ function InlineTermCard({
     <div className="mt-2 flex overflow-hidden rounded-xl border border-white/10 bg-neutral-900/80 backdrop-blur">
       <div className={`w-1 shrink-0 ${c.bar}`} />
       <div className="min-w-0 flex-1">
-        {/* collapsed: the detected term + detector note */}
-        <button onClick={toggleLong} className="w-full px-3.5 py-3 text-left">
+        <div className="px-3.5 py-3">
           <p className="text-sm leading-relaxed">
             <span className={`font-semibold ${c.accent}`}>{term.term}</span>
             <span className={`ml-2 text-xs ${c.caption}`}>{term.domain}</span>
           </p>
-          <p className="mt-0.5 text-sm leading-relaxed text-neutral-300">
-            {zeroAiTermNote(term.kind)}
-          </p>
-          {!open && <p className="mt-1 text-xs text-neutral-500">more ▸</p>}
-        </button>
-        {/* Opened: public reference, then an explicitly requested AI layer. */}
-        {open && (
-          <div className="border-t border-white/[0.06] px-3.5 py-3 text-sm leading-relaxed">
-            <TermReference
-              id={term.id}
-              term={term.term}
-              kind={term.kind}
-              wikiHref={`/wiki?term=${term.id}`}
-            />
-            {error && <p className="text-red-400/90">couldn&apos;t load — {error}</p>}
-            {term.l3 ? (
-              <div className="mt-3 border-t border-white/[0.06] pt-2">
-                <p className="text-[10px] uppercase tracking-widest text-neutral-500">in your sessions</p>
-                <p className="mt-1 text-neutral-100">{term.l3}</p>
-              </div>
-            ) : grounding ? (
-              <div className="mt-3 animate-pulse space-y-2" aria-label="loading in-context">
-                <div className="h-3 w-full rounded bg-neutral-800" />
-                <div className="h-3 w-4/6 rounded bg-neutral-800" />
-              </div>
-            ) : pending.grounding ? (
-              <p className="mt-3 animate-pulse text-xs text-neutral-500">queued — a connected collector will explain this in your context…</p>
-            ) : (
-              <AiCallConfirmButton
-                term={term.term}
-                source={messageId ? "selected" : "latest"}
-                onConfirm={loadGrounding}
-                className="mt-3 rounded-md border border-neutral-700 px-2 py-1 text-xs text-neutral-400 hover:text-neutral-100"
-              />
-            )}
-            <button
-              onClick={onClose}
-              className="mt-2 block text-xs text-neutral-500 hover:text-neutral-300"
-            >
-              close ✕
-            </button>
+        </div>
+        <div className="border-t border-white/[0.06] px-3.5 py-3 text-sm leading-relaxed">
+          <TermReference id={term.id} term={term.term} kind={term.kind} wikiHref={`/wiki?term=${term.id}`} />
+          {error && <p className="text-red-400/90">couldn&apos;t load — {error}</p>}
+          {term.l3 ? (
+            <div className="mt-3 border-t border-white/[0.06] pt-2">
+              <p className="text-[10px] uppercase tracking-widest text-neutral-500">in your sessions</p>
+              <p className="mt-1 text-neutral-100">{term.l3}</p>
+            </div>
+          ) : grounding ? (
+            <div className="mt-3 animate-pulse space-y-2" aria-label="loading in-context"><div className="h-3 w-full rounded bg-neutral-800" /><div className="h-3 w-4/6 rounded bg-neutral-800" /></div>
+          ) : pending.grounding ? (
+            <p className="mt-3 animate-pulse text-xs text-neutral-500">queued — a connected collector will explain this in your context…</p>
+          ) : (
+            <AiCallConfirmButton term={term.term} source={messageId ? "selected" : "latest"} onConfirm={loadGrounding} className="mt-3 rounded-md border border-neutral-700 px-2 py-1 text-xs text-neutral-400 hover:text-neutral-100" />
+          )}
+          <div className="mt-3 flex items-center gap-3">
+            <button onClick={() => onLearned(term.id)} disabled={!!term.learnedAt} className="text-xs text-neutral-400 hover:text-neutral-100 disabled:cursor-default disabled:text-emerald-300/80">{term.learnedAt ? "Learned ✓" : "Mark as learned"}</button>
+            <button onClick={onClose} className="text-xs text-neutral-500 hover:text-neutral-300">close ✕</button>
           </div>
-        )}
+        </div>
       </div>
     </div>
   );
@@ -1014,13 +981,12 @@ function ChipBoard({
       : null;
   const learnedCount = terms.filter((t) => t.learnedAt).length;
 
-  // Time-sorted rows with day-divider flags, precomputed so render stays pure.
+  // Terms stay visible after learning; learning only changes their state.
   const timeRows = useMemo(() => {
-    const unlearned = byTime.filter((t) => !t.learnedAt);
-    return unlearned.map((t, i) => {
+    return byTime.map((t, i) => {
       const day = dayLabelOf(t.lastSeenAt);
       const divider =
-        i === 0 || day !== dayLabelOf(unlearned[i - 1].lastSeenAt);
+        i === 0 || day !== dayLabelOf(byTime[i - 1].lastSeenAt);
       return { t, day, divider };
     });
   }, [byTime]);
@@ -1076,7 +1042,7 @@ function ChipBoard({
         onClick={() => setActiveTermId((cur) => (cur === t.id ? null : t.id))}
         className={`rounded-2xl border p-4 text-left transition-all duration-150 hover:-translate-y-0.5 active:translate-y-0 ${
           hero ? "col-span-2" : "col-span-1"
-        } ${isActive ? c.tileActive : c.tile}`}
+        } ${isActive ? c.tileActive : t.learnedAt ? "border-neutral-800 bg-neutral-900/50 opacity-60 hover:border-neutral-600" : c.tile}`}
       >
         <p
           className={`flex items-center gap-1.5 text-[10px] font-medium uppercase tracking-[0.14em] ${c.caption}`}
@@ -1100,21 +1066,6 @@ function ChipBoard({
       </button>
     );
   };
-
-  const learnedPill = (t: LiveTerm) => (
-    <button
-      key={t.id}
-      title={`${t.domain} · learned`}
-      onClick={() => setActiveTermId((cur) => (cur === t.id ? null : t.id))}
-      className={`rounded-full border px-3 py-1 text-sm transition-colors ${
-        activeTermId === t.id
-          ? "border-neutral-500 bg-neutral-800 text-neutral-200"
-          : "border-neutral-800 text-neutral-500 hover:border-neutral-600 hover:text-neutral-300"
-      }`}
-    >
-      {t.term}
-    </button>
-  );
 
   const KIND_LABELS: ["all" | "term" | "initial", string][] = [
     ["all", "all"],
@@ -1157,6 +1108,7 @@ function ChipBoard({
           </span>{" "}
           to learn · {learnedCount} learned
         </p>
+        <p className="mt-1 text-xs text-neutral-500">Open a term for its reference. Mark it learned only when you&apos;re ready; it stays on the board.</p>
         <div className="mt-1.5 h-1 w-36 overflow-hidden rounded-full bg-neutral-800">
           <div
             className="h-full rounded-full bg-gradient-to-r from-amber-300/80 to-emerald-300/80 transition-all duration-500"
@@ -1183,7 +1135,6 @@ function ChipBoard({
   if (terms.length === 0) return null;
 
   if (sort === "time") {
-    const learned = byTime.filter((t) => t.learnedAt);
     const showAxis = days.length > 1;
     return (
       <div className={showAxis ? "pr-9" : ""}>
@@ -1243,23 +1194,6 @@ function ChipBoard({
             </Fragment>
           ))}
         </div>
-        {learned.length > 0 && (
-          <div className="mt-8">
-            <h3 className="mb-2.5 text-[10px] font-medium uppercase tracking-[0.14em] text-neutral-600">
-              learned
-            </h3>
-            <div className="flex flex-wrap gap-2">{learned.map(learnedPill)}</div>
-            {active?.learnedAt && (
-              <InlineTermCard
-                key={active.id}
-                term={active}
-                onClose={() => setActiveTermId(null)}
-                onExpanded={onExpanded}
-                onLearned={onLearned}
-              />
-            )}
-          </div>
-        )}
       </div>
     );
   }
@@ -1280,29 +1214,13 @@ function ChipBoard({
                 {domain}
               </h2>
               <div className="grid grid-cols-2 gap-3">
-                {list
-                  .filter((t) => !t.learnedAt)
-                  .map((t) => (
+                {list.map((t) => (
                     <Fragment key={t.id}>
                       {tile(t, false)}
                       {active?.id === t.id && card(t)}
                     </Fragment>
                   ))}
               </div>
-              {list.some((t) => t.learnedAt) && (
-                <div className="mt-3 flex flex-wrap gap-2">
-                  {list.filter((t) => t.learnedAt).map(learnedPill)}
-                </div>
-              )}
-              {active?.learnedAt && active.domain === domain && (
-                <InlineTermCard
-                  key={active.id}
-                  term={active}
-                  onClose={() => setActiveTermId(null)}
-                  onExpanded={onExpanded}
-                  onLearned={onLearned}
-                />
-              )}
             </section>
           );
         })}

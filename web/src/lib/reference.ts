@@ -4,6 +4,7 @@ export type WikipediaReference = {
   extract: string | null;
   articleUrl: string;
   ambiguous: boolean;
+  candidates: { title: string; description: string | null; articleUrl: string }[];
 };
 
 const WIKIPEDIA_USER_AGENT =
@@ -38,7 +39,7 @@ export async function wikipediaReference(
   });
   try {
     const search = await request(
-      `https://en.wikipedia.org/w/rest.php/v1/search/page?${new URLSearchParams({ q: term, limit: "1" })}`,
+      `https://en.wikipedia.org/w/rest.php/v1/search/page?${new URLSearchParams({ q: term, limit: "5" })}`,
       requestOptions(),
     );
     if (!search.ok) return null;
@@ -48,6 +49,9 @@ export async function wikipediaReference(
     const page = found.pages?.[0];
     if (!page?.key) return null;
 
+    const candidates = found.pages?.flatMap((candidate) => candidate.key
+      ? [{ title: candidate.title ?? candidate.key, description: candidate.description ?? null, articleUrl: `https://en.wikipedia.org/wiki/${encodeURIComponent(candidate.key)}` }]
+      : []) ?? [];
     const articleUrl = `https://en.wikipedia.org/wiki/${encodeURIComponent(page.key)}`;
     const summary = await request(
       `https://en.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(page.key)}`,
@@ -70,6 +74,7 @@ export async function wikipediaReference(
       extract: ambiguous ? null : details.extract?.trim().slice(0, 1200) ?? null,
       articleUrl,
       ambiguous,
+      candidates,
     };
   } catch {
     return null;

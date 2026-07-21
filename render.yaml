@@ -1,10 +1,10 @@
-# Render Blueprint: the unjargon API/SSE backend as a free Docker web service.
+# Render Blueprint: the unjargon API/SSE backend as a Docker web service.
 # Its persistent database is Cloudflare D1, reached only through d1-worker/.
 #
 # Blueprint deploy:
 # https://render.com/deploy?repo=https://github.com/Chrisa142857/unjargon.app
 #
-# Free-tier behavior: sleeps after ~15 min idle (first request wakes it,
+# Render's free web service sleeps after ~15 min idle (first request wakes it,
 # ~1 min cold start). Set the two D1 gateway values in the Render dashboard
 # before deploying: D1_GATEWAY_URL and D1_GATEWAY_TOKEN.
 services:
@@ -18,9 +18,9 @@ services:
       - key: PORT
         value: "7860"
       - key: D1_DAILY_INGEST_MESSAGES
-        value: "4000"
+        value: "25000"
       - key: D1_DAILY_DETECTION_MESSAGES
-        value: "750"
+        value: "25000"
       # Optional overrides (set in the dashboard when wanted):
       # GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, AUTH_SECRET, APP_URL=https://unjargon.onrender.com
       # Server AI needs BOTH UNJARGON_ALLOW_SERVER_AI=1 and ANTHROPIC_API_KEY.

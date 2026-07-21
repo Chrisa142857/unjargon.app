@@ -11,7 +11,7 @@ const mockFetch: typeof fetch = async (input) => {
   const url = String(input);
   seen.push(url);
   if (url.includes("search/page")) {
-    return new Response(JSON.stringify({ pages: [{ key: "Backward_differentiation_formula", title: "Backward differentiation formula" }] }));
+    return new Response(JSON.stringify({ pages: [{ key: "Backward_differentiation_formula", title: "Backward differentiation formula" }, { key: "BDF_(disambiguation)", title: "BDF", description: "disambiguation page" }] }));
   }
   return new Response(JSON.stringify({
     title: "Backward differentiation formula",
@@ -23,6 +23,7 @@ const mockFetch: typeof fetch = async (input) => {
 const reference = await wikipediaReference("BDF", mockFetch);
 assert.equal(reference?.title, "Backward differentiation formula");
 assert.match(reference?.extract ?? "", /implicit multistep/);
+assert.equal(reference?.candidates.length, 2, "search alternatives remain available for ambiguous terms");
 assert.equal(seen.length, 2, "search then summary only");
 assert.match(googleDefinitionUrl("BDF"), /q=BDF\+definition/);
 assert.match(wikipediaSearchUrl("BDF"), /search=BDF/);

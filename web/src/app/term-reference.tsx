@@ -63,7 +63,16 @@ export function TermReference({
         <p className="mt-2 text-xs text-neutral-500">No exact public summary found—try a search below.</p>
       )}
       {reference?.ambiguous && (
-        <p className="mt-2 text-xs text-amber-200/80">Wikipedia lists multiple meanings; choose the matching field.</p>
+        <div className="mt-3">
+          <p className="text-xs text-amber-200/80">Wikipedia lists multiple meanings. Choose the matching field:</p>
+          <div className="mt-2 flex flex-col gap-1.5">
+            {reference.candidates.map((candidate) => (
+              <a key={candidate.articleUrl} href={candidate.articleUrl} target="_blank" rel="noopener noreferrer" className="rounded border border-neutral-700 px-2 py-1.5 text-xs text-neutral-200 hover:text-white">
+                <span className="font-medium">{candidate.title}</span>{candidate.description && <span className="text-neutral-500"> · {candidate.description}</span>}
+              </a>
+            ))}
+          </div>
+        </div>
       )}
       <div className="mt-3 flex flex-wrap gap-2 text-xs">
         <a
