@@ -1245,6 +1245,7 @@ export default function LiveStream() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [showPairing, setShowPairing] = useState(false);
   const [showUninstall, setShowUninstall] = useState(false);
+  const [removing, setRemoving] = useState(false);
 
   useEffect(() => {
     if (bounceToApiOrigin("/live")) return;
@@ -1283,6 +1284,23 @@ export default function LiveStream() {
     fetch(api(`/api/terms/${termId}/learned`), { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ learned }) }).catch(() => {});
   }
 
+  async function removeStaleMachine() {
+    if (selectedDeviceId === null || !window.confirm("Remove this stale pairing? Its glossary history remains in your all-machine wiki.")) return;
+    setRemoving(true);
+    try {
+      const res = await fetch(api(`/api/devices/${selectedDeviceId}/unpair`), { method: "POST" });
+      if (!res.ok) throw new Error(`remove failed (${res.status})`);
+      setDevices((current) => current.filter((device) => device.id !== selectedDeviceId));
+      setSelectedDeviceId(null);
+      setTerms([]);
+      setShowUninstall(false);
+    } catch (err) {
+      setLoadError(String(err));
+    } finally {
+      setRemoving(false);
+    }
+  }
+
   return (
     <main className="relative flex min-h-dvh flex-col bg-neutral-950 text-neutral-100">
       <header className="relative z-10 flex flex-wrap items-center gap-2 border-b border-white/[0.06] bg-neutral-950/80 px-4 py-3 text-sm backdrop-blur">
@@ -1297,7 +1315,7 @@ export default function LiveStream() {
       <div className="relative z-10 flex-1 px-4 py-6">
         <div className="mx-auto max-w-2xl">
           {showPairing && <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/70 px-4 py-10 backdrop-blur-sm"><InstallCollectorCallout onClose={() => setShowPairing(false)} /></div>}
-          {showUninstall && <section className="mb-5 rounded-lg border border-rose-300/20 bg-rose-300/[0.04] px-4 py-3 text-sm text-neutral-300"><p>Run this on the machine you want to remove. It stops and removes the local collector, service, queue, logs, and Claude hook; transcripts and wiki history stay intact.</p><code className="mt-3 block overflow-x-auto rounded bg-neutral-950 px-3 py-2 text-xs text-neutral-100">{UNINSTALL_COMMAND}</code></section>}
+          {showUninstall && <section className="mb-5 rounded-lg border border-rose-300/20 bg-rose-300/[0.04] px-4 py-3 text-sm text-neutral-300"><p>Run this on the machine you want to remove. It stops and removes the local collector, service, queue, logs, and Claude hook; transcripts and wiki history stay intact.</p><code className="mt-3 block overflow-x-auto rounded bg-neutral-950 px-3 py-2 text-xs text-neutral-100">{UNINSTALL_COMMAND}</code><p className="mt-4 text-xs text-neutral-500">Already used an older uninstall command? Remove its stale server pairing below; this never affects the machine or its wiki history.</p><button onClick={removeStaleMachine} disabled={removing || selectedDeviceId === null} className="mt-2 text-xs text-rose-300 hover:text-rose-200 disabled:opacity-50">{removing ? "Removing…" : "Remove stale pairing"}</button></section>}
           <ImportProgressCard progress={progress} />
           {terms.length === 0 && <div className="text-center text-neutral-500">{!loaded ? "loading…" : loadError ? <><p>couldn&apos;t reach the unjargon API — {loadError}</p><BackendPrompt /></> : devices.length === 0 ? <InstallCollectorCallout /> : "No terms yet — unjargon is checking this machine's history."}</div>}
           <ChipBoard terms={terms} onExpanded={cacheExpansion} onLearned={markLearned} />
