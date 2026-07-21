@@ -26,9 +26,11 @@ export async function GET(req: Request) {
   }
 
   const hourAgo = Date.now() - 3600_000;
+  const today = utcDayStart();
   const [progress] = await db
     .select({
       messages: count(tables.messages.id),
+      uploadedToday: count(sql`case when ${tables.messages.createdAt} >= ${today} then 1 end`),
       detected: count(tables.messages.detectedAt),
       detectedLastHour: count(sql`case when ${tables.messages.detectedAt} > ${hourAgo} then 1 end`),
       sessions: countDistinct(tables.sessions.id),
@@ -42,7 +44,19 @@ export async function GET(req: Request) {
   const [{ detectedToday }] = await db
     .select({ detectedToday: count(tables.messages.id) })
     .from(tables.messages)
-    .where(gte(tables.messages.detectedAt, utcDayStart()));
+    .where(gte(tables.messages.detectedAt, today));
+  const [{ userUploadedToday }] = await db
+    .select({ userUploadedToday: count(tables.messages.id) })
+    .from(tables.messages)
+    .innerJoin(tables.sessions, eq(tables.messages.sessionId, tables.sessions.id))
+    .innerJoin(tables.devices, eq(tables.sessions.deviceId, tables.devices.id))
+    .where(and(eq(tables.devices.userId, user.id), gte(tables.messages.createdAt, today)));
+  const [{ serviceUploadedToday, serviceStored }] = await db
+    .select({
+      serviceUploadedToday: count(sql`case when ${tables.messages.createdAt} >= ${today} then 1 end`),
+      serviceStored: count(tables.messages.id),
+    })
+    .from(tables.messages);
 
   const rows = await db
     .select({
@@ -68,7 +82,13 @@ export async function GET(req: Request) {
   return Response.json({
     devices: devices.map((device) => ({ id: device.id, name: device.name, lastSeenAt: device.lastSeenAt.toISOString() })),
     selectedDeviceId: selected.id,
-    limits: publicLimits(),
+    limits: publicLimits({
+      deviceDaily: Number(progress.uploadedToday),
+      deviceStored: Number(progress.messages),
+      userDaily: Number(userUploadedToday),
+      globalDaily: Number(serviceUploadedToday),
+      globalStored: Number(serviceStored),
+    }),
     progress: {
       messages: Number(progress.messages), detected: Number(progress.detected), ratePerHour: Number(progress.detectedLastHour),
       dailyDetectionLimit: detectionDailyLimit, dailyDetectionUsed: Number(detectedToday), sessions: Number(progress.sessions),
@@ -82,8 +102,14 @@ export async function GET(req: Request) {
   });
 }
 
-function publicLimits() {
-  return { deviceDaily: collectorLimits.deviceDaily, userDaily: collectorLimits.userDaily, globalDaily: collectorLimits.globalDaily, deviceStored: collectorLimits.deviceStored, globalStored: collectorLimits.globalStored };
+function publicLimits(used: Partial<Record<keyof typeof collectorLimits, number>> = {}) {
+  return {
+    deviceDaily: { used: used.deviceDaily ?? 0, limit: collectorLimits.deviceDaily },
+    userDaily: { used: used.userDaily ?? 0, limit: collectorLimits.userDaily },
+    globalDaily: { used: used.globalDaily ?? 0, limit: collectorLimits.globalDaily },
+    deviceStored: { used: used.deviceStored ?? 0, limit: collectorLimits.deviceStored },
+    globalStored: { used: used.globalStored ?? 0, limit: collectorLimits.globalStored },
+  };
 }
 
 function emptyProgress() {
