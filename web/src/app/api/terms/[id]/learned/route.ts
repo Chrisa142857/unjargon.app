@@ -4,8 +4,6 @@ import { requireUser } from "@/lib/auth";
 
 export const dynamic = "force-dynamic";
 
-// Opening a term card marks the term learned — its chip dims on the board,
-// keeping "bright = you haven't looked at this yet" true.
 export async function POST(
   req: Request,
   { params }: { params: Promise<{ id: string }> },
@@ -22,7 +20,9 @@ export async function POST(
   if (!term || (term.userId !== null && term.userId !== user.id)) {
     return Response.json({ error: "term not found" }, { status: 404 });
   }
-  const learnedAt = new Date();
+  const body = await req.json().catch(() => ({})) as { learned?: unknown };
+  const learned = body.learned !== false;
+  const learnedAt = learned ? new Date() : null;
   await db.insert(tables.userTerms).values({ userId: user.id, termId, learnedAt }).onConflictDoUpdate({ target: [tables.userTerms.userId, tables.userTerms.termId], set: { learnedAt } });
   return Response.json({ learnedAt });
 }

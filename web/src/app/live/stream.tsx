@@ -842,7 +842,7 @@ function InlineTermCard({
             <AiCallConfirmButton term={term.term} source={messageId ? "selected" : "latest"} onConfirm={loadGrounding} className="mt-3 rounded-md border border-neutral-700 px-2 py-1 text-xs text-neutral-400 hover:text-neutral-100" />
           )}
           <div className="mt-3 flex items-center gap-3">
-            <button onClick={() => onLearned(term.id)} disabled={!!term.learnedAt} className="text-xs text-neutral-400 hover:text-neutral-100 disabled:cursor-default disabled:text-emerald-300/80">{term.learnedAt ? "Learned ✓" : "Mark as learned"}</button>
+            <button onClick={() => onLearned(term.id)} className="text-xs text-neutral-400 hover:text-neutral-100">{term.learnedAt ? "Learned ✓ · undo" : "Mark as learned"}</button>
             <button onClick={onClose} className="text-xs text-neutral-500 hover:text-neutral-300">close ✕</button>
           </div>
         </div>
@@ -953,13 +953,12 @@ function ChipBoard({
   onLearned: (termId: number) => void;
 }) {
   const [activeTermId, setActiveTermId] = useState<number | null>(null);
-  const [sort, setSort] = useState<"time" | "domain">("time");
-  const [kindFilter, setKindFilter] = useState<"all" | "term" | "initial">("all");
+  const [kindFilter, setKindFilter] = useState<"term" | "initial">("initial");
 
   const byTime = useMemo(
     () =>
       [...terms]
-        .filter((t) => kindFilter === "all" || t.kind === kindFilter)
+        .filter((t) => t.kind === kindFilter)
         .sort(
           (a, b) =>
             b.lastSeenAt.localeCompare(a.lastSeenAt) ||
@@ -967,20 +966,6 @@ function ChipBoard({
         ),
     [terms, kindFilter],
   );
-
-  const groups = useMemo(() => {
-    const byDomain = new Map<string, LiveTerm[]>();
-    for (const t of byTime) {
-      byDomain.set(t.domain, [...(byDomain.get(t.domain) ?? []), t]);
-    }
-    const out = [...byDomain.entries()].map(([domain, list]) => ({
-      domain,
-      list,
-      newest: list[0].lastSeenAt,
-    }));
-    out.sort((a, b) => b.newest.localeCompare(a.newest));
-    return out;
-  }, [byTime]);
 
   const active =
     activeTermId !== null
@@ -1011,7 +996,7 @@ function ChipBoard({
   const [currentDay, setCurrentDay] = useState<string | null>(null);
 
   useEffect(() => {
-    if (sort !== "time" || days.length < 2) return;
+    if (days.length < 2) return;
     const io = new IntersectionObserver(
       (entries) => {
         if (Date.now() < suppressObserverUntil.current) return;
@@ -1026,7 +1011,7 @@ function ChipBoard({
     );
     dividerRefs.current.forEach((el) => io.observe(el));
     return () => io.disconnect();
-  }, [sort, days]);
+  }, [days]);
 
   const card = (t: LiveTerm) => (
     <div className="col-span-2">
@@ -1074,8 +1059,7 @@ function ChipBoard({
     );
   };
 
-  const KIND_LABELS: ["all" | "term" | "initial", string][] = [
-    ["all", "all"],
+  const KIND_LABELS: ["term" | "initial", string][] = [
     ["term", "terms"],
     ["initial", "initials"],
   ];
@@ -1083,10 +1067,7 @@ function ChipBoard({
   const kindBar = (
     <div className="mb-4 flex flex-wrap items-center gap-1.5">
       {KIND_LABELS.map(([k, label]) => {
-        const n =
-          k === "all"
-            ? terms.length
-            : terms.filter((t) => t.kind === k).length;
+        const n = terms.filter((t) => t.kind === k).length;
         return (
           <button
             key={k}
@@ -1125,25 +1106,14 @@ function ChipBoard({
           />
         </div>
       </div>
-      <span className="flex shrink-0 overflow-hidden rounded-md border border-neutral-800 text-xs">
-        {(["time", "domain"] as const).map((s) => (
-          <button
-            key={s}
-            onClick={() => setSort(s)}
-            className={`px-2 py-1 transition-colors ${sort === s ? "bg-neutral-800 text-neutral-200" : "text-neutral-500 hover:text-neutral-300"}`}
-          >
-            {s === "time" ? "newest" : "by domain"}
-          </button>
-        ))}
-      </span>
+      <span className="shrink-0 text-xs text-neutral-500">newest</span>
     </div>
   );
 
   if (terms.length === 0) return null;
 
-  if (sort === "time") {
-    const showAxis = days.length > 1;
-    return (
+  const showAxis = days.length > 1;
+  return (
       <div className={showAxis ? "pr-9" : ""}>
         {showAxis && (
           <nav
@@ -1177,7 +1147,7 @@ function ChipBoard({
         {kindBar}
         {timeRows.length === 0 && (
           <p className="py-10 text-center text-sm text-neutral-500">
-            no {kindFilter === "all" ? "terms" : `${kindFilter}s`} yet.
+            no {kindFilter}s yet.
           </p>
         )}
         <div className="grid grid-cols-2 gap-3">
@@ -1202,37 +1172,6 @@ function ChipBoard({
           ))}
         </div>
       </div>
-    );
-  }
-
-  return (
-    <div>
-      {header}
-      {kindBar}
-      <div className="flex flex-col gap-8">
-        {groups.map(({ domain, list }) => {
-          const c = domainColor(domain);
-          return (
-            <section key={domain}>
-              <h2
-                className={`mb-2.5 flex items-center gap-2 text-[10px] font-medium uppercase tracking-[0.14em] ${c.caption}`}
-              >
-                <span className={`inline-block h-1.5 w-1.5 rounded-full ${c.dot}`} />
-                {domain}
-              </h2>
-              <div className="grid grid-cols-2 gap-3">
-                {list.map((t) => (
-                    <Fragment key={t.id}>
-                      {tile(t, false)}
-                      {active?.id === t.id && card(t)}
-                    </Fragment>
-                  ))}
-              </div>
-            </section>
-          );
-        })}
-      </div>
-    </div>
   );
 }
 
@@ -1333,13 +1272,14 @@ export default function LiveStream() {
   }
 
   function markLearned(termId: number) {
-    setTerms((current) => current.map((term) => term.id === termId && !term.learnedAt ? { ...term, learnedAt: new Date().toISOString() } : term));
-    fetch(api(`/api/terms/${termId}/learned`), { method: "POST" }).catch(() => {});
+    const learned = !terms.find((term) => term.id === termId)?.learnedAt;
+    setTerms((current) => current.map((term) => term.id === termId ? { ...term, learnedAt: learned ? new Date().toISOString() : null } : term));
+    fetch(api(`/api/terms/${termId}/learned`), { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ learned }) }).catch(() => {});
   }
 
   async function unpair() {
     const device = devices.find((item) => item.id === selectedDeviceId);
-    if (!device || !window.confirm(`Unpair ${device.name}? This stops uploads from that machine. Its term history stays in wiki.`)) return;
+    if (!device || !window.confirm(`Unpair ${device.name} from unjargon? This revokes its server pairing and stops future uploads. It does not uninstall the collector on ${device.name}; run the displayed uninstall command on that machine. Its term history stays in wiki.`)) return;
     const res = await fetch(api(`/api/devices/${device.id}/unpair`), { method: "POST" });
     if (!res.ok) return setLoadError("Could not unpair this machine. Please try again.");
     setDevices((current) => current.filter((item) => item.id !== device.id));
@@ -1354,11 +1294,11 @@ export default function LiveStream() {
         <span className="text-xs text-neutral-500">terms on one machine</span>
         {devices.length > 0 && <select value={selectedDeviceId ?? ""} onChange={(event) => setSelectedDeviceId(Number(event.target.value))} aria-label="selected machine" className="ml-auto rounded-md border border-neutral-700 bg-neutral-950 px-2 py-1 text-xs text-neutral-300">{devices.map((device) => <option key={device.id} value={device.id}>{device.name}</option>)}</select>}
         <Link href="/wiki" className="rounded-md border border-neutral-700 px-2 py-1 text-xs text-neutral-400 hover:text-neutral-100">all-machine wiki</Link>
+        <button onClick={unpair} disabled={devices.length === 0} title="Revokes this machine's server pairing only; it does not uninstall its local collector." className="text-xs text-rose-300 hover:text-rose-200 disabled:hidden">Unpair</button>
         <AccountMenu />
       </header>
       <div className="relative z-10 flex-1 px-4 py-6">
         <div className="mx-auto max-w-2xl">
-          {devices.length > 0 && <div className="mb-5 flex flex-wrap items-center gap-3 rounded-lg border border-neutral-800 bg-neutral-900/50 px-3 py-2 text-xs text-neutral-400"><button onClick={unpair} className="text-rose-300 hover:text-rose-200">Unpair this machine</button><span>Unpairing keeps its glossary history in wiki.</span></div>}
           <ImportProgressCard progress={progress} />
           {terms.length === 0 && <div className="text-center text-neutral-500">{!loaded ? "loading…" : loadError ? <><p>couldn&apos;t reach the unjargon API — {loadError}</p><BackendPrompt /></> : devices.length === 0 ? <InstallCollectorCallout /> : "No terms yet — unjargon is checking this machine's history."}</div>}
           <ChipBoard terms={terms} onExpanded={cacheExpansion} onLearned={markLearned} />
