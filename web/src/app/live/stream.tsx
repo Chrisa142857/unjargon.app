@@ -255,11 +255,11 @@ function ImportProgressCard({ progress }: { progress: ImportProgress }) {
   if (pending === 0) {
     status = "All caught up — receiving new updates now.";
   } else if (progress.dailyDetectionLimit > 0 && progress.dailyDetectionUsed >= progress.dailyDetectionLimit) {
-    status = "History detection resumes after 00:00 UTC to stay within the shared Cloudflare D1 free daily limit.";
+    status = "History detection resumes after 00:00 UTC to stay within this deployment's daily D1 budget.";
   } else if (receiving) {
     status = "Receiving history now — a finish estimate appears when the scan settles.";
   } else if (resetCount > 0) {
-    status = `${todayRemaining.toLocaleString()} checks fit today; at least ${resetCount} UTC ${resetCount === 1 ? "reset" : "resets"} remain under the shared free allowance.`;
+    status = `${todayRemaining.toLocaleString()} checks fit today; at least ${resetCount} UTC ${resetCount === 1 ? "reset" : "resets"} remain under the current D1 budget.`;
   } else if (eta) {
     status = `${eta} until jargon detection finishes, at the current pace.`;
   } else {

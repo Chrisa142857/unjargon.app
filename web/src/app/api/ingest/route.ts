@@ -69,7 +69,7 @@ export async function POST(req: Request) {
     const tomorrow = new Date(dayStart().getTime() + 86_400_000);
     return Response.json(
       {
-        error: "history import pauses before Cloudflare D1's free daily write limit",
+        error: "history import pauses before this deployment's daily D1 budget",
         retryAt: tomorrow.toISOString(),
       },
       {
