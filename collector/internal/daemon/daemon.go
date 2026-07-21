@@ -145,10 +145,12 @@ func (d *Daemon) Run() error {
 }
 
 func (d *Daemon) backgroundWork() {
-	tick := time.NewTicker(30 * time.Second)
-	defer tick.Stop()
+	workTick := time.NewTicker(30 * time.Second)
+	defer workTick.Stop()
+	statusTick := time.NewTicker(2 * time.Minute)
+	defer statusTick.Stop()
+	d.reportStatus()
 	for {
-		d.reportStatus()
 		// Explicit explanation work runs separately so AI calls never stall
 		// transcript tailing or collector heartbeats.
 		if d.cfg.Expander != nil && d.workBusy.CompareAndSwap(false, true) {
@@ -158,7 +160,11 @@ func (d *Daemon) backgroundWork() {
 				d.reportStatus()
 			}()
 		}
-		<-tick.C
+		select {
+		case <-workTick.C:
+		case <-statusTick.C:
+			d.reportStatus()
+		}
 	}
 }
 
@@ -199,11 +205,13 @@ func (d *Daemon) expandWork() {
 			} else {
 				log.Printf("expand work %d: AI call failed: %v", work.ID, err)
 			}
-			return // unposted claims expire server-side and are re-served
+			d.cancelExpandWork(client, work.ID)
+			return
 		}
 		text, err := aicli.ExtractText(out)
 		if err != nil {
 			log.Printf("expand work %d: %v", work.ID, err)
+			d.cancelExpandWork(client, work.ID)
 			return
 		}
 		body, _ := json.Marshal(map[string]string{"text": text})
@@ -222,6 +230,18 @@ func (d *Daemon) expandWork() {
 		}
 		postResp.Body.Close()
 		log.Printf("expand work %d: explained and delivered", work.ID)
+	}
+}
+
+func (d *Daemon) cancelExpandWork(client *http.Client, id int) {
+	req, err := http.NewRequest(http.MethodDelete, fmt.Sprintf("%s/api/work/expand/%d", d.cfg.Shipper.ServerURL, id), nil)
+	if err != nil {
+		return
+	}
+	req.Header.Set("Authorization", "Bearer "+d.cfg.Shipper.Token)
+	resp, err := client.Do(req)
+	if err == nil {
+		resp.Body.Close()
 	}
 }
 

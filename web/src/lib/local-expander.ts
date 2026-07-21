@@ -1,6 +1,6 @@
-const MAX_STATUS_AGE_MS = 90_000;
+const MAX_STATUS_AGE_MS = 6 * 60_000;
 
-// A collector writes this through /api/status every 30 seconds. Keep the
+// A collector writes this through /api/status every two minutes. Keep the
 // decision pure so a stale or disabled machine never creates a fake queue.
 export function hasLiveLocalExpander(
   statuses: readonly (string | null)[],

@@ -1,18 +1,13 @@
-import { and, count, eq, gte } from "drizzle-orm";
+import { and, count, eq, gte, sql } from "drizzle-orm";
 import { createHash } from "node:crypto";
 import { db, tables } from "@/db";
 import { deviceForRequest } from "@/lib/auth";
 import { scheduleDetection } from "@/lib/detection";
+import { collectorLimits, wouldExceed } from "@/lib/collector-limits";
 
 export const dynamic = "force-dynamic";
 
 const INSERT_CHUNK = 20; // four bound values each: safely below D1's 100-param limit.
-const dailyIngestLimit = (() => {
-  // Conservative Free-plan default. Increase only after checking D1 Row Metrics.
-  const value = Number(process.env.D1_DAILY_INGEST_MESSAGES ?? 4_000);
-  return Number.isInteger(value) && value > 0 ? value : 4_000;
-})();
-
 type IngestBody = {
   device: string;
   tool: string;
@@ -60,15 +55,38 @@ export async function POST(req: Request) {
   );
   if (msgs.length === 0) return Response.json({ stored: 0 });
 
-  const [{ today }] = await db
-    .select({ today: count(tables.messages.id) })
+  const today = dayStart();
+  const [{ deviceToday, deviceStored }] = await db
+    .select({
+      deviceToday: count(sql`case when ${tables.messages.createdAt} >= ${today} then 1 end`),
+      deviceStored: count(tables.messages.id),
+    })
     .from(tables.messages)
-    .where(gte(tables.messages.createdAt, dayStart()));
-  if (Number(today) + msgs.length > dailyIngestLimit) {
+    .innerJoin(tables.sessions, eq(tables.messages.sessionId, tables.sessions.id))
+    .where(eq(tables.sessions.deviceId, device.id));
+  const [{ userToday }] = await db
+    .select({ userToday: count(tables.messages.id) })
+    .from(tables.messages)
+    .innerJoin(tables.sessions, eq(tables.messages.sessionId, tables.sessions.id))
+    .innerJoin(tables.devices, eq(tables.sessions.deviceId, tables.devices.id))
+    .where(and(eq(tables.devices.userId, userId), gte(tables.messages.createdAt, today)));
+  const [{ globalToday, globalStored }] = await db
+    .select({
+      globalToday: count(sql`case when ${tables.messages.createdAt} >= ${today} then 1 end`),
+      globalStored: count(tables.messages.id),
+    })
+    .from(tables.messages);
+  if (
+    wouldExceed(Number(deviceToday), msgs.length, collectorLimits.deviceDaily) ||
+    wouldExceed(Number(userToday), msgs.length, collectorLimits.userDaily) ||
+    wouldExceed(Number(globalToday), msgs.length, collectorLimits.globalDaily) ||
+    wouldExceed(Number(deviceStored), msgs.length, collectorLimits.deviceStored) ||
+    wouldExceed(Number(globalStored), msgs.length, collectorLimits.globalStored)
+  ) {
     const tomorrow = new Date(dayStart().getTime() + 86_400_000);
     return Response.json(
       {
-        error: "history import pauses before this deployment's daily D1 budget",
+        error: "collector upload paused to protect the shared D1 budget",
         retryAt: tomorrow.toISOString(),
       },
       {
@@ -79,8 +97,6 @@ export async function POST(req: Request) {
   }
 
   if (body.device !== device.name) return bad(403, "device name does not match token");
-  await db.update(tables.devices).set({ lastSeenAt: new Date() }).where(eq(tables.devices.id, device.id));
-
   let [session] = await db
     .insert(tables.sessions)
     .values({

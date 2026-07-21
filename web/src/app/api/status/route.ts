@@ -2,6 +2,7 @@ import { eq } from "drizzle-orm";
 import { db, tables } from "@/db";
 import { deviceForRequest } from "@/lib/auth";
 import { scheduleDetection } from "@/lib/detection";
+import { collectorLimits } from "@/lib/collector-limits";
 
 export const dynamic = "force-dynamic";
 
@@ -20,15 +21,22 @@ export async function POST(req: Request) {
     typeof body.paused_until === "string" && !isNaN(Date.parse(body.paused_until))
       ? new Date(body.paused_until).toISOString()
       : null;
-  const status = JSON.stringify({
+  const next = {
     pausedUntil,
     budgetUsed: Number(body.budget_used) || 0,
     budgetLimit: Number(body.budget_limit) || 0,
     updatedAt: new Date().toISOString(),
-  });
+  };
+  try {
+    const previous = JSON.parse(device.importStatus ?? "") as typeof next;
+    const unchanged = previous.pausedUntil === next.pausedUntil && previous.budgetUsed === next.budgetUsed && previous.budgetLimit === next.budgetLimit;
+    if (unchanged && Date.now() - Date.parse(previous.updatedAt) < collectorLimits.statusWriteIntervalMs) {
+      return Response.json({ ok: true });
+    }
+  } catch { /* first heartbeat */ }
   await db
     .update(tables.devices)
-    .set({ importStatus: status, lastSeenAt: new Date() })
+    .set({ importStatus: JSON.stringify(next), lastSeenAt: new Date() })
     .where(eq(tables.devices.id, device.id));
   // The collector heartbeats even when its history upload is complete. This
   // wakes a parked free-tier backfill after midnight or a Render cold start.

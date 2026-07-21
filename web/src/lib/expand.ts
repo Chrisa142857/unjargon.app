@@ -79,7 +79,7 @@ export async function expandTerm(
   }
   if (!l3) {
     const requests = await db
-      .select({ id: tables.expansionRequests.id })
+      .select({ id: tables.expansionRequests.id, claimedAt: tables.expansionRequests.claimedAt })
       .from(tables.expansionRequests)
       .where(and(
         eq(tables.expansionRequests.termId, termId),
@@ -87,7 +87,9 @@ export async function expandTerm(
         eq(tables.expansionRequests.grounding, true),
         gt(tables.expansionRequests.confirmedAt, confirmationCutoff()),
       ));
-    pending.grounding = local && requests.length > 0;
+    // A collector normally claims and finishes within a minute. Do not leave
+    // the UI saying “queued” for a dead local CLI.
+    pending.grounding = local && requests.some((request) => !request.claimedAt || Date.now() - request.claimedAt.getTime() < 90_000);
   }
 
   return { l3, l3Available: true, pending };
@@ -229,6 +231,14 @@ export async function completeExpansionWork(
     .onConflictDoUpdate({ target: [tables.userTerms.userId, tables.userTerms.termId], set: { l3: trimmed } });
   await db.delete(tables.expansionRequests).where(eq(tables.expansionRequests.id, req.id));
   return true;
+}
+
+export async function cancelExpansionWork(id: number, userId: number) {
+  const removed = await db
+    .delete(tables.expansionRequests)
+    .where(and(eq(tables.expansionRequests.id, id), eq(tables.expansionRequests.userId, userId)))
+    .returning({ id: tables.expansionRequests.id });
+  return removed.length > 0;
 }
 
 function requireLLM() {

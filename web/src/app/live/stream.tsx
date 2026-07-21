@@ -772,7 +772,11 @@ function InlineTermCard({
       const res = await fetch(api(`/api/terms/${term.id}/expand`));
       const data = await res.json().catch(() => null);
       if (!res.ok) throw new Error(data?.error ?? `expand failed (${res.status})`);
-      setPending(data.pending ?? { grounding: false });
+      const nextPending = data.pending ?? { grounding: false };
+      if (pending.grounding && !nextPending.grounding && !data.l3) {
+        setError("The local AI CLI did not finish. No explanation was saved; try again only if you want another confirmed AI call.");
+      }
+      setPending(nextPending);
       onExpanded(term.id, data.l3);
     } catch (err) {
       setError(String(err));
