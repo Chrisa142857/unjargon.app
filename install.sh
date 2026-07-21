@@ -10,6 +10,7 @@
 #   --binary PATH   use a locally built unjargond instead of downloading
 #   --no-service    install binary + config only, don't register a service
 #   --reimport      intentionally re-send existing transcript history once
+#   --update         update the installed collector without pairing again
 #   --uninstall      remove this machine's collector, queue, and service
 set -eu
 
@@ -18,6 +19,7 @@ SERVER="https://unjargon.onrender.com"
 BINARY=""
 SERVICE=1
 REIMPORT=0
+UPDATE=0
 UNINSTALL=0
 
 while [ $# -gt 0 ]; do
@@ -27,6 +29,7 @@ while [ $# -gt 0 ]; do
     --binary)  BINARY="$2"; shift 2 ;;
     --no-service) SERVICE=0; shift ;;
     --reimport) REIMPORT=1; shift ;;
+    --update) UPDATE=1; shift ;;
     --uninstall) UNINSTALL=1; shift ;;
     *) echo "unknown flag: $1" >&2; exit 2 ;;
   esac
@@ -85,7 +88,15 @@ PYEOF
   exit 0
 fi
 
-if [ -z "$PAIR_CODE" ]; then
+CONF_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/unjargond"
+if [ "$UPDATE" -eq 1 ]; then
+  [ -r "$CONF_DIR/env" ] || { echo "error: no installed unjargon collector found" >&2; exit 1; }
+  . "$CONF_DIR/env"
+  SERVER=${UNJARGON_SERVER:-$SERVER}
+  TOKEN=${UNJARGON_TOKEN:-}
+  DEVICE=${UNJARGON_DEVICE:-}
+  [ -n "$TOKEN" ] && [ -n "$DEVICE" ] || { echo "error: existing collector config is incomplete" >&2; exit 1; }
+elif [ -z "$PAIR_CODE" ]; then
   if [ -r /dev/tty ]; then
     printf "Pairing code (from unjargon in your browser): " > /dev/tty
     IFS= read -r PAIR_CODE < /dev/tty
@@ -94,9 +105,11 @@ if [ -z "$PAIR_CODE" ]; then
     exit 2
   fi
 fi
-[ -n "$PAIR_CODE" ] || { echo "error: pairing code cannot be empty" >&2; exit 2; }
-DEVICE=$(hostname | tr -cd 'A-Za-z0-9._-')
-TOKEN=$(curl -fsS -X POST --data-urlencode "code=$PAIR_CODE" --data-urlencode "device=$DEVICE" "$SERVER/api/devices/claim") || { echo "error: could not claim this device" >&2; exit 1; }
+if [ "$UPDATE" -eq 0 ]; then
+  [ -n "$PAIR_CODE" ] || { echo "error: pairing code cannot be empty" >&2; exit 2; }
+  DEVICE=$(hostname | tr -cd 'A-Za-z0-9._-')
+  TOKEN=$(curl -fsS -X POST --data-urlencode "code=$PAIR_CODE" --data-urlencode "device=$DEVICE" "$SERVER/api/devices/claim") || { echo "error: could not claim this device" >&2; exit 1; }
+fi
 # Services start with a minimal environment; include common user CLI bins plus
 # the safe system locations instead of relying on an interactive shell PATH.
 CLI_PATH="$HOME/.local/bin:$HOME/.npm-global/bin:$HOME/.volta/bin:$HOME/.asdf/shims:$HOME/.bun/bin:$HOME/.cargo/bin:$HOME/.local/share/pnpm:$HOME/Library/pnpm:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:/Applications/ChatGPT.app/Contents/Resources:$HOME/Applications/ChatGPT.app/Contents/Resources"
@@ -114,7 +127,6 @@ esac
 
 BIN_DIR="$HOME/.local/bin"
 BIN="$BIN_DIR/unjargond"
-CONF_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/unjargond"
 STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/unjargond"
 mkdir -p "$BIN_DIR" "$CONF_DIR" "$STATE_DIR"
 
@@ -144,15 +156,19 @@ chmod +x "$BIN"
 echo "installed $BIN"
 
 # --- config ------------------------------------------------------------------
-umask 077
-cat > "$CONF_DIR/env" <<EOF
+if [ "$UPDATE" -eq 0 ]; then
+  umask 077
+  cat > "$CONF_DIR/env" <<EOF
 UNJARGON_SERVER=$SERVER
 UNJARGON_TOKEN=$TOKEN
 UNJARGON_DEVICE=$DEVICE
 UNJARGON_BACKFILL=all
 UNJARGON_LOCAL_EXPLAIN=auto
 EOF
-echo "wrote $CONF_DIR/env"
+  echo "wrote $CONF_DIR/env"
+else
+  echo "updated collector; kept $CONF_DIR/env"
+fi
 
 # --- Claude Code SessionStart hook (primary transcript discovery) -------------
 if command -v python3 >/dev/null 2>&1; then
