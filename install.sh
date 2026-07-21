@@ -38,6 +38,18 @@ if [ "$UNINSTALL" -eq 1 ]; then
   BIN="$BIN_DIR/unjargond"
   CONF_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/unjargond"
   STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/unjargond"
+  # Revoke the device while its local credential still exists, so it no longer
+  # appears as a paired machine. Local cleanup must still succeed offline.
+  if [ -r "$CONF_DIR/env" ]; then
+    . "$CONF_DIR/env"
+    if [ -n "${UNJARGON_SERVER:-}" ] && [ -n "${UNJARGON_TOKEN:-}" ]; then
+      if curl -fsS -X POST -H "Authorization: Bearer $UNJARGON_TOKEN" "$UNJARGON_SERVER/api/devices/unpair" >/dev/null; then
+        echo "removed this machine from unjargon"
+      else
+        echo "warning: could not remove this machine from unjargon; local collector will still be removed" >&2
+      fi
+    fi
+  fi
   if [ "$OS" = darwin ]; then
     PLIST="$HOME/Library/LaunchAgents/app.unjargon.unjargond.plist"
     launchctl bootout "gui/$(id -u)" "$PLIST" 2>/dev/null || launchctl unload "$PLIST" 2>/dev/null || true

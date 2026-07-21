@@ -291,6 +291,7 @@ function ImportProgressCard({ progress }: { progress: ImportProgress }) {
         <span><strong className="text-white">{progress.sessions.toLocaleString()}</strong> sessions found</span>
         {range && <span>{range}</span>}
       </div>
+      <p className="mt-3 text-xs text-sky-100/80">Jargon cap: up to 75 unique history terms; 25 more are reserved for new live conversations.</p>
       <p className="mt-3 text-xs text-neutral-500">{status}</p>
     </section>
   );
