@@ -1244,6 +1244,8 @@ function BackendPrompt() {
 }
 
 type PairedDevice = { id: number; name: string; lastSeenAt: string };
+type ServiceLimits = { deviceDaily: number; userDaily: number; globalDaily: number; deviceStored: number; globalStored: number };
+const EMPTY_LIMITS: ServiceLimits = { deviceDaily: 0, userDaily: 0, globalDaily: 0, deviceStored: 0, globalStored: 0 };
 
 // The live surface is intentionally a single-machine glossary. It never
 // receives raw agent messages; /wiki is the all-machine term history.
@@ -1257,6 +1259,7 @@ export default function LiveStream() {
   const [showPairing, setShowPairing] = useState(false);
   const [showUninstall, setShowUninstall] = useState(false);
   const [removing, setRemoving] = useState(false);
+  const [limits, setLimits] = useState<ServiceLimits>(EMPTY_LIMITS);
 
   useEffect(() => {
     if (bounceToApiOrigin("/live")) return;
@@ -1272,6 +1275,7 @@ export default function LiveStream() {
         setDevices(data.devices);
         setTerms(data.terms);
         setProgress(data.progress);
+        setLimits(data.limits ?? EMPTY_LIMITS);
         setLoadError(null);
         if (selectedDeviceId === null && data.selectedDeviceId !== null) setSelectedDeviceId(data.selectedDeviceId);
       } catch (err) {
@@ -1327,6 +1331,7 @@ export default function LiveStream() {
         <div className="mx-auto max-w-2xl">
           {showPairing && <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/70 px-4 py-10 backdrop-blur-sm"><InstallCollectorCallout onClose={() => setShowPairing(false)} /></div>}
           {showUninstall && <section className="mb-5 rounded-lg border border-rose-300/20 bg-rose-300/[0.04] px-4 py-3 text-sm text-neutral-300"><p>Run this on the machine you want to remove. It stops and removes the local collector, service, queue, logs, and Claude hook; transcripts and wiki history stay intact.</p><code className="mt-3 block overflow-x-auto rounded bg-neutral-950 px-3 py-2 text-xs text-neutral-100">{UNINSTALL_COMMAND}</code><p className="mt-4 text-xs text-neutral-500">Already used an older uninstall command? Remove its stale server pairing below; this never affects the machine or its wiki history.</p><button onClick={removeStaleMachine} disabled={removing || selectedDeviceId === null} className="mt-2 text-xs text-rose-300 hover:text-rose-200 disabled:opacity-50">{removing ? "Removing…" : "Remove stale pairing"}</button></section>}
+          {limits.deviceDaily > 0 && <section className="mb-5 rounded-lg border border-emerald-300/15 bg-emerald-300/[0.04] px-4 py-3 text-xs text-neutral-400"><p className="font-medium uppercase tracking-widest text-emerald-200/80">Shared service limits</p><p className="mt-2">This machine: {limits.deviceDaily.toLocaleString()} uploads/day and {limits.deviceStored.toLocaleString()} stored updates. Your account: {limits.userDaily.toLocaleString()} uploads/day. Service-wide: {limits.globalDaily.toLocaleString()} uploads/day and {limits.globalStored.toLocaleString()} stored updates.</p></section>}
           <ImportProgressCard progress={progress} />
           <AiUsageIndicator progress={progress} />
           {terms.length === 0 && <div className="text-center text-neutral-500">{!loaded ? "loading…" : loadError ? <><p>couldn&apos;t reach the unjargon API — {loadError}</p><BackendPrompt /></> : devices.length === 0 ? <InstallCollectorCallout /> : "No terms yet — unjargon is checking this machine's history."}</div>}

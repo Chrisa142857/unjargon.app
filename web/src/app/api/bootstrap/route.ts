@@ -3,6 +3,7 @@ import { db, tables } from "@/db";
 import { requireUser } from "@/lib/auth";
 import { isHighConfidenceTerm } from "@/lib/detect";
 import { detectionDailyLimit, scheduleDetection, utcDayStart } from "@/lib/detection";
+import { collectorLimits } from "@/lib/collector-limits";
 
 export const dynamic = "force-dynamic";
 
@@ -21,7 +22,7 @@ export async function GET(req: Request) {
   const requested = Number(new URL(req.url).searchParams.get("device"));
   const selected = devices.find((device) => device.id === requested) ?? devices[0] ?? null;
   if (!selected) {
-    return Response.json({ devices: [], selectedDeviceId: null, progress: emptyProgress(), terms: [] });
+    return Response.json({ devices: [], selectedDeviceId: null, progress: emptyProgress(), limits: publicLimits(), terms: [] });
   }
 
   const hourAgo = Date.now() - 3600_000;
@@ -67,6 +68,7 @@ export async function GET(req: Request) {
   return Response.json({
     devices: devices.map((device) => ({ id: device.id, name: device.name, lastSeenAt: device.lastSeenAt.toISOString() })),
     selectedDeviceId: selected.id,
+    limits: publicLimits(),
     progress: {
       messages: Number(progress.messages), detected: Number(progress.detected), ratePerHour: Number(progress.detectedLastHour),
       dailyDetectionLimit: detectionDailyLimit, dailyDetectionUsed: Number(detectedToday), sessions: Number(progress.sessions),
@@ -78,6 +80,10 @@ export async function GET(req: Request) {
       ...term, learnedAt: term.learnedAt?.toISOString() ?? null, lastSeenAt: (term.lastSeenAt ?? term.createdAt).toISOString(),
     })),
   });
+}
+
+function publicLimits() {
+  return { deviceDaily: collectorLimits.deviceDaily, userDaily: collectorLimits.userDaily, globalDaily: collectorLimits.globalDaily, deviceStored: collectorLimits.deviceStored, globalStored: collectorLimits.globalStored };
 }
 
 function emptyProgress() {

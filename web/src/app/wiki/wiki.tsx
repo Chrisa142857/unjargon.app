@@ -161,13 +161,15 @@ export default function Wiki() {
 }
 
 function TermRow({ term, onOpen }: { term: WikiTerm; onOpen: () => void }) {
+  const aiExplained = Boolean(term.l3);
   return (
     <button
       onClick={onOpen}
-      className="flex w-full items-baseline gap-3 rounded-lg border border-neutral-800 bg-neutral-900/50 px-3 py-2.5 text-left hover:border-neutral-700"
+      className={`flex w-full items-baseline gap-3 rounded-lg border px-3 py-2.5 text-left hover:border-neutral-700 ${aiExplained ? "border-violet-300/45 bg-violet-300/[0.08]" : "border-neutral-800 bg-neutral-900/50"}`}
     >
       <span className="font-medium">{term.term}</span>
       <span className="min-w-0 flex-1 truncate text-sm text-neutral-400">{term.domain}</span>
+      {aiExplained && <span className="shrink-0 rounded-full border border-violet-300/30 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-violet-200">AI explained</span>}
       <span className="shrink-0 text-xs text-neutral-600">
         {term.sightings}× · {term.sessions} session{term.sessions === 1 ? "" : "s"}
       </span>

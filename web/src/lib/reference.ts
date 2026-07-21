@@ -2,7 +2,7 @@ export type WikipediaReference = {
   title: string;
   description: string | null;
   extract: string | null;
-  articleUrl: string;
+  articleUrl: string | null;
   ambiguous: boolean;
   candidates: { title: string; description: string | null; articleUrl: string }[];
 };
@@ -40,12 +40,14 @@ export async function wikipediaReference(
     const found = await search.json() as {
       pages?: { key?: string; title?: string; description?: string | null }[];
     };
-    const page = found.pages?.[0];
-    if (!page?.key) return null;
+    const page = found.pages?.find((candidate) => candidate.key && titleMatchesTerm(term, candidate.title ?? candidate.key));
 
     const candidates = found.pages?.flatMap((candidate) => candidate.key
       ? [{ title: candidate.title ?? candidate.key, description: candidate.description ?? null, articleUrl: `https://en.wikipedia.org/wiki/${encodeURIComponent(candidate.key)}` }]
       : []) ?? [];
+    if (!page?.key) {
+      return { title: term, description: null, extract: null, articleUrl: null, ambiguous: false, candidates };
+    }
     const articleUrl = `https://en.wikipedia.org/wiki/${encodeURIComponent(page.key)}`;
     const summary = await request(
       `https://en.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(page.key)}`,
@@ -73,4 +75,9 @@ export async function wikipediaReference(
   } catch {
     return null;
   }
+}
+
+function titleMatchesTerm(term: string, title: string) {
+  const escaped = term.trim().replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(`^${escaped}(?:$|[\\s(–-])`, "i").test(title.trim());
 }

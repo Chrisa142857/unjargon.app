@@ -45,7 +45,7 @@ export function TermReference({
         Basic reference · zero AI
       </p>
       {!loaded ? (
-        <p className="mt-2 animate-pulse text-xs text-neutral-500">looking up a public Wikipedia reference…</p>
+        <p className="mt-2 animate-pulse text-xs text-neutral-500">looking up public references…</p>
       ) : reference?.extract ? (
         <>
           <p className="mt-2 text-sm leading-relaxed text-neutral-100">{reference.extract}</p>
@@ -56,7 +56,7 @@ export function TermReference({
           Wikipedia: {reference.description}
         </p>
       ) : (
-        <p className="mt-2 text-xs text-neutral-500">No exact public summary found—try a search below.</p>
+        <p className="mt-2 text-xs text-neutral-500">No exact Wikipedia page found for this term. Use the Google search below for the matching field.</p>
       )}
       {reference?.ambiguous && (
         <div className="mt-3">
@@ -77,7 +77,7 @@ export function TermReference({
           rel="noopener noreferrer"
           className="rounded-md border border-neutral-700 px-2 py-1 text-neutral-300 hover:text-white"
         >
-          Search Google ↗
+          Google: {term} definition ↗
         </a>
         <a
           href={wikipediaUrl}
@@ -85,7 +85,7 @@ export function TermReference({
           rel="noopener noreferrer"
           className="rounded-md border border-neutral-700 px-2 py-1 text-neutral-300 hover:text-white"
         >
-          Open Wikipedia ↗
+          {reference?.articleUrl ? "Open Wikipedia ↗" : "Search Wikipedia ↗"}
         </a>
         {wikiHref && (
           <Link href={wikiHref} className="rounded-md border border-neutral-700 px-2 py-1 text-neutral-300 hover:text-white">
