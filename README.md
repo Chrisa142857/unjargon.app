@@ -104,6 +104,11 @@ implementation, debugging, deployment, and verification tasks. Codex and
 GPT-5.6 Terra were used to build and validate the project, while unjargon's
 runtime detector intentionally remains zero-AI by default.
 
+The repository's earlier history also contains now-superseded iterations
+written with other AI coding agents; during Build Week, Codex rewrote that
+work into the current zero-AI product. No code was written by hand at any
+stage.
+
 ## Development
 
 ```sh
