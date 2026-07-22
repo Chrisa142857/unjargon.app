@@ -79,17 +79,23 @@ Claude Code / Codex → unjargond → HTTPS → Render (Next.js + SSE)
 
 ## Built with Codex + GPT-5.6 Terra
 
-unjargon was built during OpenAI Build Week with Codex using GPT-5.6 Terra.
-The primary build session is `019f717b-b276-7660-9d7a-d3419838978e`.
+unjargon was built **entirely by Codex with GPT-5.6 Terra** during OpenAI
+Build Week — the builder wrote no code by hand. The primary build session is
+`019f717b-b276-7660-9d7a-d3419838978e`.
 
-Codex accelerated the work by helping turn the product from a transcript
-collector into a privacy-conscious, zero-AI jargon tool: it implemented and
-tested the Claude Code/Codex parsers, tightened the detector so code-shaped
-text is not treated as jargon, wired the Render + Cloudflare D1 deployment,
-and repeatedly verified the public app and installer end to end. Key product
-decisions were to make history import and detection free of AI calls, make
-public references the default explanation, and require a clear confirmation
-before a user spends any AI credit for an in-context explanation.
+Codex was used throughout, end to end. It turned the product from a
+transcript collector into a privacy-conscious, zero-AI jargon tool: it
+implemented and tested the Claude Code/Codex parsers, tightened the detector
+so code-shaped text is not treated as jargon, wired the Render + Cloudflare
+D1 deployment, and repeatedly verified the public app and installer end to
+end. Connected to the builder's GitHub, Render, and Cloudflare accounts,
+Codex shipped every deploy itself, and it fanned out subagent audits —
+detector false-positive analysis over thousands of annotations, free-tier
+cost and quota reviews, and deployment readiness — ending in a final review
+with no remaining P0/P1 findings. Key product decisions were to make history
+import and detection free of AI calls, make public references the default
+explanation, and require a clear confirmation before a user spends any AI
+credit for an in-context explanation.
 
 The collaboration was deliberately iterative. The builder found the early
 medium- and high-effort passes unsatisfactory, then requested ultra-effort
@@ -114,10 +120,30 @@ go test ./...
 go build -o unjargond ./cmd/unjargond
 ```
 
+A full local run of the web app needs, in `web/.env.local`: `D1_GATEWAY_URL`
+and `D1_GATEWAY_TOKEN` (from the DEPLOY.md Worker gateway setup), plus
+`AUTH_SECRET`, `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, and `APP_URL`
+(e.g. `http://localhost:3000`) for Google sign-in. The check scripts above
+run offline against the bundled dataset and fixtures — no env needed.
+
 Server AI needs both `UNJARGON_ALLOW_SERVER_AI=1` and `ANTHROPIC_API_KEY` and
 is used only by the explicit, confirmed in-session explanation button.
 `UNJARGON_FAKE_TRANSLATOR=1` provides deterministic, on-demand explanation
 text for demos.
+
+### Sample data
+
+Recorded agent sessions live in `collector/fixtures/` (`session.jsonl` for
+Claude Code, `codex-session.jsonl` for Codex). They feed the parser tests
+(`go test ./...`), and you can replay one against a paired server to see the
+whole pipeline work without waiting for a live agent:
+
+```sh
+./unjargond replay fixtures/session.jsonl -server http://localhost:3000 -token <device token>
+```
+
+The zero-AI detector's word-frequency dataset is bundled in `web/data/`
+(source and license in [`web/data/README.md`](web/data/README.md)).
 
 See [`HANDOFF.md`](HANDOFF.md) for current deployment and implementation notes.
 See [`DEPLOY.md`](DEPLOY.md) to create the free D1 database and Worker gateway.
