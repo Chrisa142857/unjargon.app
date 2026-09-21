@@ -126,12 +126,29 @@ stable per-message dedupe key.
 
 ## D1 free-plan safeguards
 
+D1 Free allows roughly 5 million rows read and 100,000 rows written per day.
+Reads are the easier of the two to spend by accident, because SQLite answers an
+unfiltered `count(*)` by walking every row and D1 bills each one.
+
 - Incoming collector requests are split into 20 messages, under D1's 100
   bound-parameter limit; a `429 Retry-After` pauses a large local backfill and
   retains only the unacknowledged tail for the next daily window.
-- The server accepts up to 4,000 new messages/day by default and detects
-  jargon in up to 1,000 shared messages/day. Both limits are configurable with
-  `D1_DAILY_INGEST_MESSAGES` and `D1_DAILY_DETECTION_MESSAGES`.
+- The upload guards read running totals from the `settings` table rather than
+  counting the `messages` table (`web/src/lib/counters.ts`), so their cost does
+  not grow with stored history. `npm run check:quota` fails if a hot-path query
+  goes back to scanning. The totals are recounted once a day so a crash between
+  an insert and its counter update cannot drift them permanently.
+- `/live` polls `/api/bootstrap` every 30s and not at all while the tab is in
+  the background. The route serves its glossary and per-device aggregates from
+  a cached snapshot, recomputed only once an indexed watermark shows the
+  detector has moved.
+- Per day the server accepts 2,000 new messages per device, 4,000 per user and
+  15,000 service-wide, and detects jargon in up to 1,000 shared messages.
+  Configure them with `D1_DAILY_INGEST_PER_DEVICE`, `D1_DAILY_INGEST_PER_USER`,
+  `D1_DAILY_INGEST_GLOBAL` and `D1_DAILY_DETECTION_MESSAGES`. Raise the ingest
+  ceilings with care: `messages` carries four indexes and D1 counts an index
+  entry as a row written, so each stored message spends five of the 100,000
+  daily writes.
 - Work resumes after 00:00 UTC rather than dropping old history. `/live`
   shows the detection pause and calendar windows when the daily detector
   allowance is spent.
@@ -160,6 +177,7 @@ the secure auth cookie.
 ```sh
 cd web
 npm run check:d1
+npm run check:quota
 npm run check:detector
 npm run check:reference
 npm run lint
@@ -172,6 +190,8 @@ go test ./...
 
 `check:d1` applies the real D1 SQLite baseline to an in-memory SQLite engine
 and exercises timestamps, unique upserts, `RETURNING`, foreign keys, and the
-proxy result shape. Before cutover, also run the same baseline against the
-remote D1 database with Wrangler and complete a Google sign-in → pair →
-collector import flow in the deployed app.
+proxy result shape. `check:quota` runs the counter upserts against the same
+baseline and asserts, through `EXPLAIN QUERY PLAN`, that no query on the ingest
+or `/live` path walks the whole `messages` table. Before cutover, also run the
+same baseline against the remote D1 database with Wrangler and complete a
+Google sign-in → pair → collector import flow in the deployed app.

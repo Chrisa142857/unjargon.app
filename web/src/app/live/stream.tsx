@@ -64,6 +64,7 @@ const INSTALL_COMMAND =
   "curl -fsSL https://raw.githubusercontent.com/Chrisa142857/unjargon.app/main/install.sh | sh -s -- --server https://unjargon.onrender.com";
 const UNINSTALL_COMMAND = `${INSTALL_COMMAND} --uninstall`;
 const MAX_VISIBLE_MESSAGES = 200;
+const BOOTSTRAP_POLL_MS = 30_000;
 
 // Every domain gets a stable color identity — chips are the product surface,
 // so they carry the visual weight. Class strings are complete literals so
@@ -1291,9 +1292,27 @@ export default function LiveStream() {
         if (!cancelled) setLoaded(true);
       }
     }
+    // Detections arrive over SSE, so this poll only has to catch what the
+    // stream does not carry (collector heartbeats, limit meters). A background
+    // tab polls nothing at all: every request here is billed against the free
+    // D1 plan's daily allowance, and a forgotten tab used to spend all of it.
     refresh();
-    const timer = window.setInterval(refresh, 5000);
-    return () => { cancelled = true; window.clearInterval(timer); };
+    let timer = 0;
+    const start = () => { timer = window.setInterval(refresh, BOOTSTRAP_POLL_MS); };
+    const stop = () => { window.clearInterval(timer); timer = 0; };
+    const onVisibility = () => {
+      if (document.hidden) return stop();
+      if (timer) return;
+      refresh();
+      start();
+    };
+    if (!document.hidden) start();
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => {
+      cancelled = true;
+      stop();
+      document.removeEventListener("visibilitychange", onVisibility);
+    };
   }, [selectedDeviceId]);
 
   function cacheExpansion(termId: number, l3: string | null) {

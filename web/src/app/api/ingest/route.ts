@@ -1,9 +1,10 @@
-import { and, count, eq, gte, sql } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { createHash } from "node:crypto";
 import { db, tables } from "@/db";
 import { deviceForRequest } from "@/lib/auth";
 import { scheduleDetection } from "@/lib/detection";
 import { collectorLimits, wouldExceed } from "@/lib/collector-limits";
+import { loadMessageUsage, recordStoredMessages } from "@/lib/counters";
 
 export const dynamic = "force-dynamic";
 
@@ -56,32 +57,17 @@ export async function POST(req: Request) {
   if (msgs.length === 0) return Response.json({ stored: 0 });
 
   const today = dayStart();
-  const [{ deviceToday, deviceStored }] = await db
-    .select({
-      deviceToday: count(sql`case when ${tables.messages.createdAt} >= ${today} then 1 end`),
-      deviceStored: count(tables.messages.id),
-    })
-    .from(tables.messages)
-    .innerJoin(tables.sessions, eq(tables.messages.sessionId, tables.sessions.id))
-    .where(eq(tables.sessions.deviceId, device.id));
-  const [{ userToday }] = await db
-    .select({ userToday: count(tables.messages.id) })
-    .from(tables.messages)
-    .innerJoin(tables.sessions, eq(tables.messages.sessionId, tables.sessions.id))
-    .innerJoin(tables.devices, eq(tables.sessions.deviceId, tables.devices.id))
-    .where(and(eq(tables.devices.userId, userId), gte(tables.messages.createdAt, today)));
-  const [{ globalToday, globalStored }] = await db
-    .select({
-      globalToday: count(sql`case when ${tables.messages.createdAt} >= ${today} then 1 end`),
-      globalStored: count(tables.messages.id),
-    })
-    .from(tables.messages);
+  const scope = { userId, deviceId: device.id, dayStart: today };
+  // Running totals, not `count(*)` scans: a collector uploading its history
+  // sends one chunk every 20 messages, and scanning the table for each of them
+  // is what exhausts D1's daily rows-read allowance. See lib/counters.ts.
+  const usage = await loadMessageUsage(scope);
   if (
-    wouldExceed(Number(deviceToday), msgs.length, collectorLimits.deviceDaily) ||
-    wouldExceed(Number(userToday), msgs.length, collectorLimits.userDaily) ||
-    wouldExceed(Number(globalToday), msgs.length, collectorLimits.globalDaily) ||
-    wouldExceed(Number(deviceStored), msgs.length, collectorLimits.deviceStored) ||
-    wouldExceed(Number(globalStored), msgs.length, collectorLimits.globalStored)
+    wouldExceed(usage.deviceDaily, msgs.length, collectorLimits.deviceDaily) ||
+    wouldExceed(usage.userDaily, msgs.length, collectorLimits.userDaily) ||
+    wouldExceed(usage.globalDaily, msgs.length, collectorLimits.globalDaily) ||
+    wouldExceed(usage.deviceStored, msgs.length, collectorLimits.deviceStored) ||
+    wouldExceed(usage.globalStored, msgs.length, collectorLimits.globalStored)
   ) {
     const tomorrow = new Date(dayStart().getTime() + 86_400_000);
     return Response.json(
@@ -139,7 +125,10 @@ export async function POST(req: Request) {
 
   // Deliberately ignore any `translation` field sent by an older collector.
   // Detection happens server-side with no AI call and also backfills history.
-  if (stored.length > 0) scheduleDetection(userId, true);
+  if (stored.length > 0) {
+    await recordStoredMessages(scope, stored.length);
+    scheduleDetection(userId, true);
+  }
 
   return Response.json({ stored: stored.length });
 }
