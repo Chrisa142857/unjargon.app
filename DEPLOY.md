@@ -149,6 +149,18 @@ unfiltered `count(*)` by walking every row and D1 bills each one.
   ceilings with care: `messages` carries four indexes and D1 counts an index
   entry as a row written, so each stored message spends five of the 100,000
   daily writes.
+- The detector keeps each user's term budget in memory between batches and
+  re-seeds it hourly. Rebuilding it per batch is a five-table join over every
+  sighting that user owns, measured at 49,137 rows read on the deployed
+  database — the most expensive query on that path.
+- The query for the oldest undetected messages carries an explicit
+  `INDEXED BY messages_undetected_ts`. Drizzle's SQLite dialect has no index
+  hint, and without one SQLite reads every message the user owns and sorts them
+  to keep fifty (12,338 rows read per batch, even when nothing is pending).
+- Revoking a device stamps its still-undetected backlog with the time it
+  arrived. Detection skips unpaired machines, so those rows would otherwise sit
+  in the partial index forever and be walked by every later batch. The glossary
+  `/wiki` shows is unaffected; a re-paired machine collects from new messages.
 - Work resumes after 00:00 UTC rather than dropping old history. `/live`
   shows the detection pause and calendar windows when the daily detector
   allowance is spent.
@@ -191,7 +203,8 @@ go test ./...
 `check:d1` applies the real D1 SQLite baseline to an in-memory SQLite engine
 and exercises timestamps, unique upserts, `RETURNING`, foreign keys, and the
 proxy result shape. `check:quota` runs the counter upserts against the same
-baseline and asserts, through `EXPLAIN QUERY PLAN`, that no query on the ingest
-or `/live` path walks the whole `messages` table. Before cutover, also run the
+baseline and asserts, through `EXPLAIN QUERY PLAN`, that no query on the ingest,
+`/live`, or detection path walks the whole `messages` table. It also pins the
+index hint above in place, since losing it is silent apart from the row count. Before cutover, also run the
 same baseline against the remote D1 database with Wrangler and complete a
 Google sign-in → pair → collector import flow in the deployed app.

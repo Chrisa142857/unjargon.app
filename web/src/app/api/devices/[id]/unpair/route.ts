@@ -1,6 +1,7 @@
 import { and, eq } from "drizzle-orm";
 import { db, tables } from "@/db";
 import { requireUser } from "@/lib/auth";
+import { retireUndetectedBacklog } from "@/lib/detection";
 
 export const dynamic = "force-dynamic";
 
@@ -17,5 +18,6 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
     .where(and(eq(tables.devices.id, id), eq(tables.devices.userId, user.id)))
     .returning({ id: tables.devices.id });
   if (!updated.length) return Response.json({ error: "device not found" }, { status: 404 });
+  await retireUndetectedBacklog(id);
   return Response.json({ ok: true });
 }

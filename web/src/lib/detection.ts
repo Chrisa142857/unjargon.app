@@ -1,4 +1,4 @@
-import { and, asc, count, eq, gte, isNotNull, isNull, ne, sql } from "drizzle-orm";
+import { and, count, eq, gte, isNull, ne, sql } from "drizzle-orm";
 import { db, tables } from "@/db";
 import { publish, type DetectionEvent } from "@/lib/bus";
 import { detectJargon } from "@/lib/detect";
@@ -24,11 +24,13 @@ const globalForDetection = globalThis as unknown as {
   __unjargonDetectionRequested?: Set<number>;
   __unjargonDetectionWakeups?: Map<number, number>;
   __unjargonDetectionDone?: Set<number>;
+  __unjargonTermBudgets?: Map<number, { budget: TermBudget; at: number }>;
 };
 const running = (globalForDetection.__unjargonDetectionUsers ??= new Set());
 const requested = (globalForDetection.__unjargonDetectionRequested ??= new Set());
 const wakeups = (globalForDetection.__unjargonDetectionWakeups ??= new Map());
 const done = (globalForDetection.__unjargonDetectionDone ??= new Set());
+const budgets = (globalForDetection.__unjargonTermBudgets ??= new Map());
 
 function nextUtcMidnight() {
   const now = new Date();
@@ -45,6 +47,22 @@ function wakeAfterQuotaReset(userId: number) {
     if (wakeups.get(userId) === until) wakeups.delete(userId);
     scheduleDetection(userId);
   }, Math.max(1_000, until - Date.now()));
+}
+
+// Revoking a device leaves its uploaded backlog permanently undetected, since
+// detection skips unpaired machines. Those rows would otherwise sit in the
+// messages_undetected_ts partial index forever and be walked by every later
+// batch for every user: 809 such rows on the deployed database already cost
+// 2,389 rows read per batch. Stamping them with the time they arrived retires
+// them from that index without touching the glossary /wiki still shows. A
+// later re-pair collects from new messages, matching the fresh secret it gets.
+export async function retireUndetectedBacklog(deviceId: number) {
+  await db.run(sql`
+    update "messages" set "detected_at" = "created_at"
+    where "detected_at" is null and "session_id" in (
+      select "id" from "sessions" where "device_id" = ${deviceId}
+    )
+  `);
 }
 
 // A bootstrap or ingest schedules one bounded batch. Re-scheduling after each
@@ -93,25 +111,70 @@ async function detectBatch(userId: number) {
   const remaining = Math.max(0, detectionDailyLimit - usedToday);
   if (remaining === 0) return "quota" as const;
   const batchSize = Math.min(BATCH_SIZE, remaining);
-  const rows = await db
-    .select({ message: tables.messages })
-    .from(tables.messages)
-    .innerJoin(tables.sessions, eq(tables.messages.sessionId, tables.sessions.id))
-    .innerJoin(tables.devices, eq(tables.sessions.deviceId, tables.devices.id))
-    // Unpaired machines retain their glossary in /wiki, but their uploaded
-    // backlog must never keep consuming work after the user revokes them.
-    .where(and(eq(tables.devices.userId, userId), isNotNull(tables.devices.tokenHash), isNull(tables.messages.detectedAt)))
-    .orderBy(asc(tables.messages.ts), asc(tables.messages.id))
-    .limit(batchSize);
+  const rows = await pendingMessages(userId, batchSize);
   if (rows.length === 0) return "done" as const;
 
-  const budget = await loadTermBudget(userId);
+  const budget = await termBudgetFor(userId);
   const sharedTerms = new Map<string, SharedTerm>();
-  for (const [index, { message }] of rows.entries()) {
+  for (const [index, message] of rows.entries()) {
     await storeDetection(message, userId, sharedTerms, budget, usedToday + index + 1);
   }
   if (rows.length >= remaining) return "quota" as const;
   return rows.length === batchSize ? "more" as const : "done" as const;
+}
+
+// The oldest messages still awaiting detection. Drizzle's SQLite dialect has
+// no index hint, and without one SQLite plans this from devices -> sessions ->
+// messages_session_id: it reads every message the user owns and sorts them in a
+// temp B-tree only to keep fifty. Measured against the deployed database that
+// was 12,338 rows read per batch to return nothing at all. messages_undetected_ts
+// is a partial index on (ts) WHERE detected_at IS NULL, so walking it yields the
+// oldest undetected rows already ordered and LIMIT ends the scan early. Its
+// implicit (ts, rowid) order is exactly the ORDER BY wanted here, because id is
+// the rowid. Unpaired machines keep their glossary in /wiki, but their uploaded
+// backlog must never consume detection work after the user revokes them.
+type PendingMessage = { id: number; sessionId: number; ts: Date; text: string; createdAt: Date };
+
+async function pendingMessages(userId: number, limit: number): Promise<PendingMessage[]> {
+  const rows = await db.all<[number, number, number, string, number]>(sql`
+    select m."id", m."session_id", m."ts", m."text", m."created_at"
+    from "messages" m indexed by "messages_undetected_ts"
+    where m."detected_at" is null and m."session_id" in (
+      select s."id" from "sessions" s
+      join "devices" d on d."id" = s."device_id"
+      where d."user_id" = ${userId} and d."token_hash" is not null
+    )
+    order by m."ts", m."id"
+    limit ${limit}
+  `);
+  return rows.map(([id, sessionId, ts, text, createdAt]) => ({
+    id, sessionId, ts: new Date(ts), text, createdAt: new Date(createdAt),
+  }));
+}
+
+// Which terms this user has already seen. Only detection changes that set, and
+// retainTerm adds each key it keeps as the sighting below is written, so the
+// loaded copy stays in step with the database and can be held between batches.
+// Rebuilding it per batch is a five-table join over every sighting the user
+// owns - 49,137 rows read on the deployed database, the most expensive query
+// left on this path. Re-seeding hourly keeps a restart or an out-of-band edit
+// from pinning a stale set indefinitely.
+const BUDGET_TTL_MS = 60 * 60_000;
+const BUDGET_LIMIT = 64;
+
+async function termBudgetFor(userId: number): Promise<TermBudget> {
+  const cached = budgets.get(userId);
+  if (cached && Date.now() - cached.at < BUDGET_TTL_MS) return cached.budget;
+  const budget = await loadTermBudget(userId);
+  // Re-inserting moves the key last, so the eviction below drops the user
+  // whose detector has been idle longest.
+  budgets.delete(userId);
+  budgets.set(userId, { budget, at: Date.now() });
+  for (const key of budgets.keys()) {
+    if (budgets.size <= BUDGET_LIMIT) break;
+    budgets.delete(key);
+  }
+  return budget;
 }
 
 async function loadTermBudget(userId: number): Promise<TermBudget> {
@@ -143,7 +206,7 @@ type SharedTerm = {
 };
 
 async function storeDetection(
-  message: typeof tables.messages.$inferSelect,
+  message: PendingMessage,
   userId: number,
   sharedTerms: Map<string, SharedTerm>,
   budget: TermBudget,

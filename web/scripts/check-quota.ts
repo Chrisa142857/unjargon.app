@@ -138,6 +138,96 @@ const deviceDaySql = await capture(() =>
 );
 assertNoMessageScan("the device daily reseed", deviceDaySql, [device.id, day.getTime()]);
 
+// --- the detection path ------------------------------------------------------
+
+// An unpaired machine whose backlog detection will never process.
+const [revoked] = await db.insert(tables.devices).values({ userId: user.id, name: "old-laptop", tokenHash: null }).returning();
+const [revokedSession] = await db.insert(tables.sessions).values({ deviceId: revoked.id, tool: "codex", sessionKey: "gone" }).returning();
+await db.insert(tables.messages).values(
+  Array.from({ length: 30 }, (_, i) => ({
+    sessionId: revokedSession.id,
+    dedupeKey: `revoked-${i}`,
+    ts: new Date(day.getTime() - (i + 1) * 1000),
+    text: `revoked ${i}`,
+  })),
+);
+
+// The oldest-undetected query, exactly as lib/detection.ts issues it. Without
+// the index hint SQLite drives from devices and sorts every message the user
+// owns; the assertions below pin the hinted plan in place.
+let pendingRows: [number, number, number, string, number][] = [];
+const pendingSql = await capture(async () => {
+  pendingRows = await db.all<[number, number, number, string, number]>(sql`
+    select m."id", m."session_id", m."ts", m."text", m."created_at"
+    from "messages" m indexed by "messages_undetected_ts"
+    where m."detected_at" is null and m."session_id" in (
+      select s."id" from "sessions" s
+      join "devices" d on d."id" = s."device_id"
+      where d."user_id" = ${user.id} and d."token_hash" is not null
+    )
+    order by m."ts", m."id"
+    limit ${5}
+  `);
+});
+
+// The gateway answers with `.raw()`, so a hand-written query comes back as
+// positional arrays with no column names. lib/detection.ts destructures them in
+// the select's order, and that is only safe if this holds.
+assert.equal(pendingRows.length, 5);
+assert(Array.isArray(pendingRows[0]), `a raw query must yield positional arrays, got ${JSON.stringify(pendingRows[0])}`);
+const [firstId, firstSession, firstTs, firstText, firstCreated] = pendingRows[0];
+assert.equal(firstText, "message 40", "detection must start from the oldest undetected message");
+assert.equal(firstSession, session.id, "a revoked machine's backlog must not be offered for detection");
+assert.equal(firstId, 41, "message 40 is the 41st row inserted");
+assert(
+  typeof firstTs === "number" && typeof firstCreated === "number",
+  "ts and created_at cross the wire as epoch millis, so the mapper must wrap them in Date",
+);
+assert.deepEqual(
+  pendingRows.map((row) => row[3]),
+  ["message 40", "message 41", "message 42", "message 43", "message 44"],
+  "rows must arrive oldest-first",
+);
+
+const pendingPlan = assertNoMessageScan("the oldest-undetected query", pendingSql, [user.id, 5]);
+assert(
+  /USING INDEX messages_undetected_ts/i.test(pendingPlan),
+  `the oldest-undetected query must ride the partial index:\n${pendingPlan}`,
+);
+assert(
+  !/TEMP B-TREE FOR ORDER BY/i.test(pendingPlan),
+  `the partial index already orders by (ts, rowid); a sort means the hint stopped working:\n${pendingPlan}`,
+);
+
+// Retiring a revoked machine's backlog takes it out of that partial index, so
+// later batches stop walking rows they can never process.
+const revokedBefore = sqlite
+  .prepare(`SELECT count(*) AS n FROM messages WHERE detected_at IS NULL AND session_id = ?`)
+  .all(revokedSession.id) as { n: number }[];
+assert.equal(revokedBefore[0].n, 30);
+
+await db.run(sql`
+  update "messages" set "detected_at" = "created_at"
+  where "detected_at" is null and "session_id" in (
+    select "id" from "sessions" where "device_id" = ${revoked.id}
+  )
+`);
+
+const revokedAfter = sqlite
+  .prepare(`SELECT count(*) AS retired, sum(detected_at = created_at) AS stamped FROM messages WHERE session_id = ?`)
+  .all(revokedSession.id) as { retired: number; stamped: number }[];
+assert.equal(revokedAfter[0].retired, 30);
+assert.equal(revokedAfter[0].stamped, 30, "a retired row is stamped with the time it arrived, not with now");
+assert.equal(
+  (sqlite.prepare(`SELECT count(*) AS n FROM messages WHERE detected_at IS NULL AND session_id = ?`).all(revokedSession.id) as { n: number }[])[0].n,
+  0,
+);
+// Retiring must not touch the paired machine's real backlog.
+assert.equal(
+  (sqlite.prepare(`SELECT count(*) AS n FROM messages WHERE detected_at IS NULL AND session_id = ?`).all(session.id) as { n: number }[])[0].n,
+  360,
+);
+
 // --- the shape this check exists to keep out ---------------------------------
 
 // The guards used to be written this way, once per ingest chunk and once per
